@@ -37,24 +37,32 @@ main{
     }
 }
 
-/* main . main-grid */
-main .main-grid{
-    background-color: var(--border);
-    aspect-ratio: 1/1;
-    border: solid var(--border) 1px;
+/* main-panel */
+.main-panel{
     flex-grow: 3;
-    display: grid;
-    gap: 1px;
     max-width: 98vh;
 }
 
-/* main . main-grid . grid-cell */
-main .main-grid .grid-cell{
+/* main-grid */
+.main-grid{
+    background-color: var(--border);
+    aspect-ratio: 1/1;
+    border: solid var(--border) 1px;
+    display: grid;
+    gap: 1px;
+}
+
+.main-grid .grid-cell{
     background-color: var(--background);
 }
 
-/* main . rules-inspector */
-main .rules-inspector{
+#set-brush-button{
+    min-width: 40px;
+    min-height: 40px;
+}
+
+/* rules-inspector */
+.rules-inspector{
     border: solid var(--border) 1px;
     flex-grow: 1;
     min-height: 98vh;

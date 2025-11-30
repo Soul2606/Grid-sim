@@ -1,39 +1,42 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Document</title>
-    <script type="module" src="dist/script.js" defer></script>
-    <link rel="stylesheet" href="style.css">
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Document</title>
+	<script type="module" src="dist/script.js" defer></script>
+	<link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <header>
-        <input id="toggle-dark-mode" type="checkbox" name="toggle-dark-mode">
-        <label for="toggle-dark-mode">Dark Mode</label>
-        <script>
-            document.getElementById('toggle-dark-mode').addEventListener('input',()=>{
-                if (document.getElementById('toggle-dark-mode').checked) {
-                    document.documentElement.classList.add('dark')
-                } else {
-                    document.documentElement.classList.remove('dark')
-                }
-            })
-        </script>
-    </header>
-    <main>
-        <div id="main-grid" class="main-grid">
-            <!--Code injected by js here-->
-        </div>
-        <section class="rules-inspector">
-            <h1>Rules Inspector</h1>
-            <div>
-                <div id="cell-classes-list">
-                    <!--Code injected by js here-->
-                </div>
-                <button id="new-cell-button">Create new cell class</button>
-            </div>
-        </section>
-    </main>
+	<header>
+		<input id="toggle-dark-mode" type="checkbox" name="toggle-dark-mode">
+		<label for="toggle-dark-mode">Dark Mode</label>
+		<script>
+			document.getElementById('toggle-dark-mode').addEventListener('input',()=>{
+				if (document.getElementById('toggle-dark-mode').checked) {
+					document.documentElement.classList.add('dark')
+				} else {
+					document.documentElement.classList.remove('dark')
+				}
+			})
+		</script>
+	</header>
+	<main>
+		<div class="main-panel">
+			<div id="main-grid" class="main-grid">
+				<!--Code injected by js here-->
+			</div>
+			<button id="set-brush-button"></button>
+		</div>
+		<section class="rules-inspector">
+			<h1>Rules Inspector</h1>
+			<div>
+				<div id="cell-classes-list">
+					<!--Code injected by js here-->
+				</div>
+				<button id="new-cell-button">Create new cell class</button>
+			</div>
+		</section>
+	</main>
 </body>
 </html>

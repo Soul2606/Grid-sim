@@ -5,7 +5,15 @@ console.log('hello world')
 
 type Variable = {
 	name:string
-	val:unknown
+	val:string|number|boolean|null
+}
+
+
+
+
+type CellEntry = {
+	cell:CellInstance
+	position:Vector2D
 }
 
 
@@ -29,16 +37,24 @@ class Vector2D {
 
 class Cell {
 	private _name:string
+	private _icon:string
 	publicVariables:Variable[]
 	privateVariables:Variable[]
-	readonly isReference:boolean // Reference cells can be at multiple places at once
-	readonly isFloating:boolean // Floating cells can overlap with other cells and do not block non floating cells
-	constructor({name, publicVariables=[], privateVariables=[], isReference=false, isFloating=false}:{name:string, publicVariables?:Variable[], privateVariables?:Variable[], isReference?:boolean, isFloating?:boolean}) {
+	isReference:boolean // Reference cells can be at multiple places at once
+	isFloating:boolean // Floating cells can overlap with other cells and do not block non floating cells
+	private valueChangeCalls:Function[]
+	constructor({name, icon, publicVariables=[], privateVariables=[], isReference=false, isFloating=false}:{name:string, icon:string, publicVariables?:Variable[], privateVariables?:Variable[], isReference?:boolean, isFloating?:boolean}) {
 		this._name = name
+		this._icon = icon
 		this.isReference = isReference
 		this.isFloating = isFloating
 		this.publicVariables = [...publicVariables]
 		this.privateVariables = [...privateVariables]
+		this.valueChangeCalls = []
+	}
+
+	private callChanges() {
+		this.valueChangeCalls.forEach(f=>f(this))
 	}
 
 	get name():string{
@@ -48,6 +64,21 @@ class Cell {
 	set name(str:string){
 		if (AllCellClasses.cells.some(val=>val.name === str)) return
 		this._name = str
+		this.callChanges()
+	}
+
+	get icon():string{
+		return this._icon
+	}
+
+	set icon(str:string){
+		this._icon = str
+		this.callChanges()
+	}
+
+	trackChanges(func:(cell:Cell)=>void){
+		if (this.valueChangeCalls.includes(func)) return
+		this.valueChangeCalls.push(func)
 	}
 }
 
@@ -56,10 +87,8 @@ class Cell {
 
 class CellInstance {
 	readonly cell:Cell
-	position:Vector2D
-	constructor(cell:Cell, position:Vector2D) {
+	constructor(cell:Cell) {
 		this.cell = cell
-		this.position = position
 	}
 
 	tick(deltaMs:number){
@@ -72,10 +101,10 @@ class CellInstance {
 
 const Grid = new (class {
 	private _size:Vector2D
-	private members:CellInstance[] //CellInstance has position and other data
+	private entries:CellEntry[]
 	constructor(size:Vector2D) {
 		this._size = size
-		this.members = []
+		this.entries = []
 	}
 
 	get width():number{
@@ -92,31 +121,38 @@ const Grid = new (class {
 
 	getPosition(cell:CellInstance):Vector2D|null{
 		if (cell.cell.isReference) throw new Error("Cannot get position of a cell that is a reference. Use 'getPositions' instead");
-		const member = this.members.find(mem=>mem===cell)
+		const member = this.entries.find(ent=>ent.cell===cell)
 		if (member) return member.position
 		return null
 	}
 
 	getPositions(cell:CellInstance):Vector2D[]{
 		if (!cell.cell.isReference) throw new Error("Cannot get positions of a cell that is not a reference. Use 'getPosition' instead");
-		return this.members.filter(mem=>mem===cell).map(mem=>mem.position)
+		return this.entries.filter(ent=>ent.cell===cell).map(ent=>ent.position)
 	}
 
-	cellsAt(pos:Vector2D):CellInstance[]{
-		return this.members.filter(mem=>mem.position.equal(pos))
+	entriesAtPos(pos:Vector2D):CellEntry[]{
+		return this.entries.filter(ent=>ent.position.equal(pos))
 	}
 
-	addMember(cell:CellInstance, position:Vector2D):boolean{
-		const nonFloatingCellsAtPosition = this.cellsAt(position).filter(mem=>!mem.cell.isFloating)
-		if (nonFloatingCellsAtPosition.length > 0 && !cell.cell.isFloating) return false
-		if (cell.cell.isReference) {
-			this.members.push(cell)
-			return true
-		} else if (!this.members.some(mem=>mem===cell)) {
-			this.members.push(cell)
+	setCell(cell:CellInstance, position:Vector2D):boolean{
+		const entryAtPosition = this.entriesAtPos(position).find(ent=>!ent.cell.cell.isFloating)
+		if (entryAtPosition && !cell.cell.isFloating) {
+			this.entries[this.entries.indexOf(entryAtPosition)] = {cell, position}
 			return true
 		}
-		return false
+		if (cell.cell.isReference) {
+			this.entries.push({cell, position})
+			return true
+		} else {
+			this.entries.push({cell, position})
+			const entryOfCell = this.entries.find(ent=>ent.cell===cell)
+			if (entryOfCell) {
+				const indexOFCell = this.entries.indexOf(entryOfCell)
+				this.entries.splice(indexOFCell, 1)
+			}
+			return true
+		}
 	}
 
 	startSimulation(){
@@ -126,12 +162,16 @@ const Grid = new (class {
 		removeAllChildren(mainGrid)
 		mainGrid.style.gridTemplateColumns = '1fr '.repeat(this.width)
 		for (let i = 0; i < this.width * this.height; i++) {
-			mainGrid.innerHTML += 
-			`
-			<div class="grid-cell"></div>
-			`
+			const position = new Vector2D(i%this.width, Math.floor(i/this.width))
+			const root = document.createElement('div')
+			root.className = 'grid-cell'
+			root.addEventListener('click',()=>{
+				console.log('x', position.x, 'y', position.y)
+			})
+			mainGrid.appendChild(root)
 		}
 		/*
+		wip
 		let now = Date.now()
 		setInterval(() => {
 			const deltaMs = Date.now() - now; now = Date.now();			
@@ -158,7 +198,8 @@ function removeAllChildren(element:HTMLElement):Element[] {
 
 
 
-function editableTextModule(element:HTMLElement, callbackFunction:(el:HTMLElement, newText:string, oldText:string)=>void){
+// Todo: fix enterOnInput to work with emoji's. the solution probably involves composition and addEventListener("compositionstart") and end
+function editableTextModule(element:HTMLElement, callbackFunction:(el:HTMLElement, newText:string, oldText:string)=>void, options:{enterOnInput?:true}={}){
 	if (element.children.length > 0) {
 		console.error(element)
 		throw new Error("Element must not have any non text children");
@@ -173,6 +214,13 @@ function editableTextModule(element:HTMLElement, callbackFunction:(el:HTMLElemen
     let shouldRevert = true
     let originalText = element.textContent
 
+	function enterText() {
+		callbackFunction(element, element.textContent, originalText)
+        originalText = element.textContent
+        shouldRevert = false
+        element.blur()
+	}
+
     element.addEventListener('focus',e=>{
 		e.stopPropagation()
         originalText = element.textContent
@@ -186,18 +234,20 @@ function editableTextModule(element:HTMLElement, callbackFunction:(el:HTMLElemen
         element.textContent = originalText
     })
 
-    element.addEventListener('keydown',e=>{
-        if (e.key !== 'Enter') {
-            return
-        }
-        e.preventDefault()
-        callbackFunction(element, element.textContent, originalText)
-        originalText = element.textContent
-        shouldRevert = false
-        element.blur()
-    })
+	if (!options.enterOnInput) {
+		element.addEventListener('keydown',e=>{
+			if (e.key !== 'Enter') {
+				return
+			}
+			e.preventDefault()
+			enterText()
+		})
+	}
     
-    element.addEventListener('input',()=>{
+    element.addEventListener('input',(e)=>{
+		if (options.enterOnInput) {
+			enterText()
+		}
         shouldRevert = true
     })
 }
@@ -207,6 +257,7 @@ function editableTextModule(element:HTMLElement, callbackFunction:(el:HTMLElemen
 
 const cellClassesListElement = document.getElementById('cell-classes-list'); if (!cellClassesListElement) throw new Error("could not find 'cell-classes-list'");
 const newCellButton = document.getElementById('new-cell-button');if (!newCellButton) throw new Error("Could not find 'new-cell-button'");
+const setBrushButton = document.getElementById('set-brush-button');if (!setBrushButton) throw new Error("Could not find 'set-brush-button'");
 
 
 
@@ -224,6 +275,17 @@ const AllCellClasses = new (class {
 
 			const header = document.createElement('div')
 			header.className = 'cell-class-header'
+
+			const icon = document.createElement('h3')
+			icon.textContent = cell.icon
+			icon.contentEditable = 'true'
+			editableTextModule(icon, (el,newText)=>{
+				cell.icon = newText
+			})
+			cell.trackChanges(()=>{
+				icon.textContent = cell.icon
+			})
+			header.appendChild(icon)
 			
 			const h = document.createElement('h3')		
 			h.textContent = cell.name
@@ -267,7 +329,7 @@ const AllCellClasses = new (class {
 
 newCellButton.addEventListener('click', ()=>{
 	let i = ''
-	while (!AllCellClasses.addCell(new Cell({name:'New thing'+i}))){
+	while (!AllCellClasses.addCell(new Cell({name:'New thing'+i, icon:'🌲'}))){
 		if (i===''){
 			i='1'
 		}else{
@@ -279,4 +341,29 @@ newCellButton.addEventListener('click', ()=>{
 
 
 
+let brushCell:Cell|'empty' = 'empty' as const
+{
+	let i = -1
+	setBrushButton.addEventListener('click',()=>{
+		i++
+		if (i >= AllCellClasses.cells.length) i = -1
+		const cell = AllCellClasses.cells[i]
+		if (cell) {
+			brushCell = cell
+			setBrushButton.textContent = cell.icon
+		} else {
+			brushCell = 'empty'
+		}
+		console.log(i)
+	})
+
+	for (const cell of AllCellClasses.cells) {
+		cell.trackChanges(()=>{
+			if (cell.icon === brushCell) setBrushButton.textContent = cell.icon
+		})
+	}
+}
+
+
+Grid.startSimulation()
 
