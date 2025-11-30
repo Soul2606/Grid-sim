@@ -1,0 +1,72 @@
+
+:root{
+    --background:#ffffff;
+    --text:#1A1A1A;
+    --secondary-text:#555555;
+    --surface:#F5F5F5;
+    --accent:#0078D4;
+    --accent-hover:#005A9E;
+    --border:#444444;
+}
+
+:root.dark{
+    --background:#121212;
+    --text:#ffffff;
+    --secondary-text:#AAAAAA;
+    --surface:#1E1E1E;
+    --accent:#4F9DFF;
+    --accent-hover:#1A73E8;
+    --border:#ffffff;
+}
+
+body{
+    color: var(--text);
+    background-color: var(--background);
+}
+
+/* main */
+main{
+    display: flex;
+    align-items: flex-start;
+}
+
+@media (max-width: 1000px) {
+    main{
+        flex-direction: column;
+        align-items: stretch;
+    }
+}
+
+/* main . main-grid */
+main .main-grid{
+    background-color: var(--border);
+    aspect-ratio: 1/1;
+    border: solid var(--border) 1px;
+    flex-grow: 3;
+    display: grid;
+    gap: 1px;
+    max-width: 98vh;
+}
+
+/* main . main-grid . grid-cell */
+main .main-grid .grid-cell{
+    background-color: var(--background);
+}
+
+/* main . rules-inspector */
+main .rules-inspector{
+    border: solid var(--border) 1px;
+    flex-grow: 1;
+    min-height: 98vh;
+    text-align: center;
+}
+
+#cell-classes-list{
+    background-color: var(--surface);
+    min-height: 50px;
+}
+
+.cell-class-header{
+    display: flex;
+    justify-content: space-between;
+}
