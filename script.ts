@@ -10,10 +10,16 @@ type Variable = {
 
 
 
-
 type CellEntry = {
 	cell:CellInstance
 	position:Vector2D
+}
+
+
+
+type Entry<T> = {
+	position:Vector2D
+	value:T
 }
 
 
@@ -27,8 +33,22 @@ class Vector2D {
 		this.y = y
 	}
 
+	static fromKey(key:string):Vector2D{
+		const [x,y] = key.split(',').map(Number)
+		if (!x||!y) throw new Error("Invalid string, string should be similar to this: '1,2' to avoid error use only strings from the toKey method in Vector2D");
+		return new Vector2D(x,y)
+	}
+
 	equal(vec:Vector2D):boolean{
 		return (this.x === vec.x && this.y === vec.y)
+	}
+
+	toString():string{
+		return `x:${this.x},y:${this.y}`
+	}
+
+	toKey():string{
+		return `${this.x},${this.y}`
 	}
 }
 
@@ -102,9 +122,11 @@ class CellInstance {
 const Grid = new (class {
 	private _size:Vector2D
 	private entries:CellEntry[]
+	private elements:Entry<HTMLElement>[]
 	constructor(size:Vector2D) {
 		this._size = size
 		this.entries = []
+		this.elements = []
 	}
 
 	get width():number{
@@ -117,6 +139,12 @@ const Grid = new (class {
 
 	set size(vec:Vector2D){
 		this._size = vec
+	}
+
+	private updateElements(){
+		const entryMap = new Map<string,string>()
+		this.entries.forEach(ent=>entryMap.set(ent.position.toKey(), ent.cell.cell.icon))
+		this.elements.forEach(el=>el.value.textContent = entryMap.get(el.position.toKey()) ?? '')
 	}
 
 	getPosition(cell:CellInstance):Vector2D|null{
@@ -135,24 +163,25 @@ const Grid = new (class {
 		return this.entries.filter(ent=>ent.position.equal(pos))
 	}
 
-	setCell(cell:CellInstance, position:Vector2D):boolean{
+	setCell(cell:CellInstance, position:Vector2D){
 		const entryAtPosition = this.entriesAtPos(position).find(ent=>!ent.cell.cell.isFloating)
 		if (entryAtPosition && !cell.cell.isFloating) {
 			this.entries[this.entries.indexOf(entryAtPosition)] = {cell, position}
-			return true
-		}
-		if (cell.cell.isReference) {
+		} else if (cell.cell.isReference) {
 			this.entries.push({cell, position})
-			return true
 		} else {
+			const cellIdx = this.entries.findIndex(ent=>ent.cell===cell)
+			if (cellIdx !== -1) this.entries.splice(cellIdx, 1)
 			this.entries.push({cell, position})
-			const entryOfCell = this.entries.find(ent=>ent.cell===cell)
-			if (entryOfCell) {
-				const indexOFCell = this.entries.indexOf(entryOfCell)
-				this.entries.splice(indexOFCell, 1)
-			}
-			return true
 		}
+		this.updateElements()
+		return this
+	}
+
+	removeCell(position:Vector2D){
+		this.entriesAtPos(position).forEach(ent=>this.entries.splice(this.entries.indexOf(ent), 1))
+		this.updateElements()
+		return this
 	}
 
 	startSimulation(){
@@ -161,25 +190,25 @@ const Grid = new (class {
 
 		removeAllChildren(mainGrid)
 		mainGrid.style.gridTemplateColumns = '1fr '.repeat(this.width)
+		mainGrid.style.gridTemplateRows = '1fr '.repeat(this.height)
+		const elements:Entry<HTMLElement>[] = []
 		for (let i = 0; i < this.width * this.height; i++) {
 			const position = new Vector2D(i%this.width, Math.floor(i/this.width))
 			const root = document.createElement('div')
 			root.className = 'grid-cell'
 			root.addEventListener('click',()=>{
-				console.log('x', position.x, 'y', position.y)
+				console.log('x', position.x, 'y', position.y, brushCell)
+				if (brushCell instanceof Cell) {
+					this.setCell(new CellInstance(brushCell), position)
+				} else {
+					this.removeCell(position)
+				}
+				console.log(this.entries)
 			})
 			mainGrid.appendChild(root)
+			elements.push({position,value:root})
 		}
-		/*
-		wip
-		let now = Date.now()
-		setInterval(() => {
-			const deltaMs = Date.now() - now; now = Date.now();			
-			for (const member of this.members) {
-				member.tick(deltaMs)
-			}
-		}, 100);
-		*/
+		this.elements = elements
 	}
 })(new Vector2D(30,30));
 
@@ -353,6 +382,7 @@ let brushCell:Cell|'empty' = 'empty' as const
 			setBrushButton.textContent = cell.icon
 		} else {
 			brushCell = 'empty'
+			setBrushButton.textContent = ''
 		}
 		console.log(i)
 	})
