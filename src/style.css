@@ -83,3 +83,11 @@ main{
     display: flex;
     justify-content: space-between;
 }
+
+.cell-class-new-rule{
+    position: relative;
+}
+
+.cell-class-new-rule-dropdown{
+    position: absolute;
+}

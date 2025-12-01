@@ -39,7 +39,7 @@ class Vector2D {
 		return new Vector2D(x,y)
 	}
 
-	equal(vec:Vector2D):boolean{
+	equals(vec:Vector2D):boolean{
 		return (this.x === vec.x && this.y === vec.y)
 	}
 
@@ -160,7 +160,7 @@ const Grid = new (class {
 	}
 
 	entriesAtPos(pos:Vector2D):CellEntry[]{
-		return this.entries.filter(ent=>ent.position.equal(pos))
+		return this.entries.filter(ent=>ent.position.equals(pos))
 	}
 
 	setCell(cell:CellInstance, position:Vector2D){
@@ -290,6 +290,26 @@ const setBrushButton = document.getElementById('set-brush-button');if (!setBrush
 
 
 
+const windowListener = (()=>{
+	type Listener = (event:Event)=>void;
+	const subscribers = new Set<Listener>()
+
+	function subscribe(func:Listener) {
+		subscribers.add(func)
+	}
+
+	function unsubscribe(func:Listener) {
+		subscribers.delete(func)
+	}
+
+	window.addEventListener('click',e=>{
+		subscribers.forEach(f=>f(e))
+	})
+
+	return {subscribe, unsubscribe, subscribers:()=>Array.from(subscribers)}
+})();
+
+
 
 const AllCellClasses = new (class {
 	private _cells:Cell[]
@@ -298,6 +318,41 @@ const AllCellClasses = new (class {
 	}
 
 	private updateList(){
+		function createAddRuleDropdown():HTMLElement {
+			let activeDropdown = false
+			const root = document.createElement('button')
+			root.className = 'cell-class-new-rule'
+			root.textContent = '+new'
+
+			const dropdown = document.createElement('div')
+			dropdown.tabIndex = 0
+			dropdown.className = 'cell-class-new-rule-dropdown'
+			dropdown.style.display = 'none'
+			const hide = ()=>{
+				dropdown.style.display = 'none'
+				activeDropdown = false
+			}
+			
+			const withAnXChance = document.createElement('button')
+			withAnXChance.textContent = 'With a X% chance...'
+			withAnXChance.addEventListener('click', e=>{
+				e.stopPropagation()
+				console.log('clicked with an X% chance')
+				hide()
+			})
+			dropdown.appendChild(withAnXChance)
+
+			root.appendChild(dropdown)
+
+			root.addEventListener('click',()=>{
+				if (activeDropdown) return
+				dropdown.style.display = ''
+				dropdown.style.minWidth = root.getBoundingClientRect().width + 'px'
+			})
+
+			return root
+		}
+
 		function createCell(cell:Cell) {
 			const root = document.createElement('div')
 			root.className = 'cell-class'
@@ -333,8 +388,14 @@ const AllCellClasses = new (class {
 			settings.className = 'cell-class-settings'
 			root.appendChild(settings)
 
+			const rules = document.createElement('div')
+			rules.className = 'cell-class-rules'
+			rules.appendChild(createAddRuleDropdown())
+			root.appendChild(rules)
+
 			return root
 		}
+
 		removeAllChildren(cellClassesListElement)
 		this._cells.map(createCell).forEach(val=>cellClassesListElement.appendChild(val))
 	}
