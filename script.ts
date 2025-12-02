@@ -24,6 +24,19 @@ type Entry<T> = {
 
 
 
+type Instruction = 
+ | {
+	id:'with_an_x%_chance'
+	param:number
+	then:Instruction[]
+}
+ | {
+	id:'turn into'
+	param:Cell|'empty'
+}
+
+
+
 
 class Vector2D {
 	x:number
@@ -62,6 +75,7 @@ class Cell {
 	privateVariables:Variable[]
 	isReference:boolean // Reference cells can be at multiple places at once
 	isFloating:boolean // Floating cells can overlap with other cells and do not block non floating cells
+	script:Instruction[]
 	private valueChangeCalls:Function[]
 	constructor({name, icon, publicVariables=[], privateVariables=[], isReference=false, isFloating=false}:{name:string, icon:string, publicVariables?:Variable[], privateVariables?:Variable[], isReference?:boolean, isFloating?:boolean}) {
 		this._name = name
@@ -70,6 +84,7 @@ class Cell {
 		this.isFloating = isFloating
 		this.publicVariables = [...publicVariables]
 		this.privateVariables = [...privateVariables]
+		this.script = []
 		this.valueChangeCalls = []
 	}
 
@@ -113,6 +128,16 @@ class CellInstance {
 
 	tick(deltaMs:number){
 		// user added code is executed here
+	}
+}
+
+
+
+
+class CustomScript {
+	readonly instructions:Instruction[]
+	constructor(script:Instruction[]) {
+		this.instructions = script
 	}
 }
 
@@ -289,6 +314,9 @@ const newCellButton = document.getElementById('new-cell-button');if (!newCellBut
 const setBrushButton = document.getElementById('set-brush-button');if (!setBrushButton) throw new Error("Could not find 'set-brush-button'");
 
 
+const rulesNestingDistance = 20 //Pixels
+const rulesNestingMax = 6
+
 
 const windowListener = (()=>{
 	type Listener = (event:Event)=>void;
@@ -318,12 +346,42 @@ const AllCellClasses = new (class {
 	}
 
 	private updateList(){
-		function createAddRuleDropdown():HTMLElement {
-			let activeDropdown = false
-			const root = document.createElement('button')
-			root.className = 'cell-class-new-rule'
-			root.textContent = '+new'
+		const cells = this._cells
+		function createRecursiveRule(rule:HTMLElement, removeCall:Function=()=>{}, dataFields:Instruction[][], nesting:number):HTMLElement {
+			const root = document.createElement('div')
+			root.className = 'cell-class-rule'
 
+			const header = document.createElement('div')
+			header.className = 'cell-class-rule-header'
+
+			const remove = document.createElement('button')
+			remove.className = 'cell-class-rule-remove'
+			remove.textContent = 'remove'
+			remove.addEventListener('click',()=>{
+				removeCall()
+				root.remove()
+			})
+			header.appendChild(remove)
+			header.appendChild(rule)
+			root.appendChild(header)
+			for (let i = 0; i < dataFields.length; i++) {
+				const data = dataFields[i]
+				if (data) root.appendChild(createRulesSection(data,nesting+1))
+			}
+				
+			return root
+		}
+
+		function createRulesSection(data:Instruction[], nesting:number):HTMLElement {
+			const root = document.createElement('div')
+			root.className = 'cell-class-rules'
+			root.style.marginLeft = rulesNestingDistance + 'px'
+			
+			const addNewButton = document.createElement('button')
+			addNewButton.className = 'cell-class-new-rule'
+			addNewButton.textContent = '+new'
+			
+			let activeDropdown = false
 			const dropdown = document.createElement('div')
 			dropdown.tabIndex = 0
 			dropdown.className = 'cell-class-new-rule-dropdown'
@@ -333,22 +391,47 @@ const AllCellClasses = new (class {
 				activeDropdown = false
 			}
 			
-			const withAnXChance = document.createElement('button')
-			withAnXChance.textContent = 'With a X% chance...'
-			withAnXChance.addEventListener('click', e=>{
-				e.stopPropagation()
-				console.log('clicked with an X% chance')
-				hide()
-			})
-			dropdown.appendChild(withAnXChance)
+			if (nesting < rulesNestingMax) {
+				const withAnXChance = document.createElement('button')
+				withAnXChance.textContent = 'With a X% chance...'
+	
+				withAnXChance.addEventListener('click', e=>{
+					e.stopPropagation()
+					console.log('clicked with an X% chance')
+					const rule = document.createElement('p')
+					rule.textContent = 'with an X% chance'
+					const then:Instruction[] = []
+					const instruction:Instruction = {
+						id:'with_an_x%_chance',
+						param:0.5,
+						then:then
+					}
+					data.push(instruction)
+					const newRule = createRecursiveRule(rule, ()=>{
+						const idx = data.findIndex(v=>v===instruction)
+						if (idx !== -1) data.splice(idx, 1)
+					}, [then], nesting)
+					root.appendChild(newRule)
+					console.log(cells)
+					hide()
+				})
+	
+				dropdown.appendChild(withAnXChance)
+			}
 
-			root.appendChild(dropdown)
+			addNewButton.appendChild(dropdown)
 
-			root.addEventListener('click',()=>{
-				if (activeDropdown) return
+			addNewButton.addEventListener('click',()=>{
+				if (activeDropdown) {
+					hide()
+					return
+				}
 				dropdown.style.display = ''
-				dropdown.style.minWidth = root.getBoundingClientRect().width + 'px'
+				dropdown.style.minWidth = addNewButton.getBoundingClientRect().width + 'px'
+				activeDropdown = true
 			})
+
+			root.appendChild(addNewButton)
 
 			return root
 		}
@@ -388,10 +471,7 @@ const AllCellClasses = new (class {
 			settings.className = 'cell-class-settings'
 			root.appendChild(settings)
 
-			const rules = document.createElement('div')
-			rules.className = 'cell-class-rules'
-			rules.appendChild(createAddRuleDropdown())
-			root.appendChild(rules)
+			root.appendChild(createRulesSection(cell.script, 0))
 
 			return root
 		}

@@ -39,7 +39,7 @@ main{
 
 /* main-panel */
 .main-panel{
-    flex-grow: 3;
+    flex-basis: 75%;
     max-width: 98vh;
 }
 
@@ -69,7 +69,7 @@ main{
 /* rules-inspector */
 .rules-inspector{
     border: solid var(--border) 1px;
-    flex-grow: 1;
+    flex-basis: 25%;
     min-height: 98vh;
     text-align: center;
 }
@@ -84,10 +84,23 @@ main{
     justify-content: space-between;
 }
 
+.cell-class-rules{
+    display: flex;
+    flex-direction: column-reverse;
+    align-items: flex-start;
+    border-left-color: var(--border);
+    border-left-width: 1px;
+    border-left-style: solid;
+}
+
 .cell-class-new-rule{
     position: relative;
 }
 
 .cell-class-new-rule-dropdown{
     position: absolute;
+}
+
+.cell-class-rule-header{
+    display: flex;
 }
