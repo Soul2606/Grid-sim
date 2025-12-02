@@ -37,6 +37,25 @@ main{
     }
 }
 
+.dropdown {
+    position: relative; display: inline-block;
+}
+
+.dropdown-panel {
+    position: absolute;
+    z-index: 1000;
+    top: 100%;
+    left: 0;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px;
+}
+
+.dropdown-panel-item:hover{
+    background-color: var(--accent-hover);
+}
+
 /* main-panel */
 .main-panel{
     flex-basis: 75%;

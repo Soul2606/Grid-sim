@@ -77,6 +77,7 @@ class Cell {
 	isFloating:boolean // Floating cells can overlap with other cells and do not block non floating cells
 	script:Instruction[]
 	private valueChangeCalls:Function[]
+	private onDeletionCalls:Set<(cell:Cell)=>void>
 	constructor({name, icon, publicVariables=[], privateVariables=[], isReference=false, isFloating=false}:{name:string, icon:string, publicVariables?:Variable[], privateVariables?:Variable[], isReference?:boolean, isFloating?:boolean}) {
 		this._name = name
 		this._icon = icon
@@ -86,6 +87,7 @@ class Cell {
 		this.privateVariables = [...privateVariables]
 		this.script = []
 		this.valueChangeCalls = []
+		this.onDeletionCalls = new Set<(cell:Cell)=>void>()
 	}
 
 	private callChanges() {
@@ -114,6 +116,14 @@ class Cell {
 	trackChanges(func:(cell:Cell)=>void){
 		if (this.valueChangeCalls.includes(func)) return
 		this.valueChangeCalls.push(func)
+	}
+
+	trackDelete(func:(cell:Cell)=>void){
+		this.onDeletionCalls.add(func)
+	}
+
+	callDelete(){
+		this.onDeletionCalls.forEach(f=>f(this))
 	}
 }
 
@@ -308,6 +318,141 @@ function editableTextModule(element:HTMLElement, callbackFunction:(el:HTMLElemen
 
 
 
+function createDropdown(content: HTMLElement[], onSelect:(idx:number)=>void=()=>{}): HTMLElement {
+	// Container
+	const root = document.createElement('div');
+	root.className = 'dropdown';
+
+	// Toggle button
+	const toggle = document.createElement('button');
+	toggle.className = 'dropdown-toggle';
+	toggle.type = 'button';
+	toggle.textContent = 'Options';
+	toggle.setAttribute('aria-haspopup', 'true');
+	toggle.setAttribute('aria-expanded', 'false');
+
+	// Panel
+	const panel = document.createElement('div');
+	panel.className = 'dropdown-panel';
+	panel.tabIndex = -1; // allow programmatic focus
+	panel.hidden = true;
+	panel.setAttribute('role', 'menu');
+
+	// Normalize content items for keyboard nav
+	const items = content.map((el) => {
+		el.setAttribute('role', 'menuitem');
+		el.tabIndex = -1; // managed focus
+		el.classList.add('dropdown-panel-item')
+		return el;
+	});
+	items.forEach(el => panel.appendChild(el));
+
+	let open = false;
+	let lastFocusedIndex = 0;
+
+	function openPanel() {
+		if (open) return;
+		open = true;
+		panel.hidden = false;
+		toggle.setAttribute('aria-expanded', 'true');
+		// Focus first item
+		const firstItem = items[0]
+		if (firstItem) {
+			lastFocusedIndex = 0;
+			firstItem.tabIndex = 0;
+			firstItem.focus();
+		} else {
+			panel.focus();
+		}
+		document.addEventListener('mousedown', onOutsideClick, true);
+		document.addEventListener('keydown', onGlobalKeydown, true);
+	}
+
+	function closePanel() {
+		if (!open) return;
+		open = false;
+		panel.hidden = true;
+		toggle.setAttribute('aria-expanded', 'false');
+		// Reset tabbable state
+		items.forEach(i => (i.tabIndex = -1));
+		lastFocusedIndex = 0
+		document.removeEventListener('mousedown', onOutsideClick, true);
+		document.removeEventListener('keydown', onGlobalKeydown, true);
+		toggle.focus();
+	}
+
+	function onOutsideClick(e: MouseEvent) {
+		if (!root.contains(e.target as Node)) closePanel();
+	}
+
+	items.forEach((el, idx)=>{
+		el.addEventListener('click', e=>{
+			if (!open) return;
+			e.stopPropagation();
+			e.preventDefault();
+			onSelect(idx);
+			closePanel();
+		})
+	})
+
+	function onGlobalKeydown(e: KeyboardEvent) {
+		if (e.key === 'Escape') {
+			e.preventDefault();
+			closePanel();
+			return;
+		}
+		// Menu navigation
+		if (!open || items.length === 0) return;
+		const max = items.length - 1;
+		const current = lastFocusedIndex;
+
+		const moveFocus = (next: number) => {
+			const currentItem = items[current]
+			if (currentItem) currentItem.tabIndex = -1;
+			lastFocusedIndex = Math.max(0, Math.min(max, next));
+			const nextItem = items[lastFocusedIndex]
+			if (nextItem) {
+				nextItem.tabIndex = 0;
+				nextItem.focus();
+			}
+		};
+
+		if (e.key === 'ArrowDown') {
+			e.preventDefault();
+			moveFocus(current + 1 > max ? 0 : current + 1);
+		} else if (e.key === 'ArrowUp') {
+			e.preventDefault();
+			moveFocus(current - 1 < 0 ? max : current - 1);
+		} else if (e.key === 'Home') {
+			e.preventDefault();
+			moveFocus(0);
+		} else if (e.key === 'End') {
+			e.preventDefault();
+			moveFocus(max);
+		} else if (e.key === 'Enter' || e.key === ' ') {
+			// Activate focused item (simulate click)
+			e.preventDefault();
+			items[lastFocusedIndex]?.click();
+		}
+	}
+
+	toggle.addEventListener('click', () => {
+		if (open) closePanel(); else openPanel();
+	});
+
+	// Keep panel width aligned with the toggle
+	const resizeObserver = new ResizeObserver(() => {
+		panel.style.minWidth = `${toggle.getBoundingClientRect().width}px`;
+	});
+	resizeObserver.observe(toggle);
+
+	root.appendChild(toggle);
+	root.appendChild(panel);
+	return root;
+}
+
+
+
 
 const cellClassesListElement = document.getElementById('cell-classes-list'); if (!cellClassesListElement) throw new Error("could not find 'cell-classes-list'");
 const newCellButton = document.getElementById('new-cell-button');if (!newCellButton) throw new Error("Could not find 'new-cell-button'");
@@ -348,6 +493,15 @@ const AllCellClasses = new (class {
 	private updateList(){
 		const cells = this._cells
 		function createRecursiveRule(rule:HTMLElement, removeCall:Function=()=>{}, dataFields:Instruction[][], nesting:number):HTMLElement {
+			const root = createRule(removeCall, rule)
+			for (let i = 0; i < dataFields.length; i++) {
+				const data = dataFields[i]
+				if (data) root.appendChild(createRulesSection(data,nesting+1))
+			}
+			return root
+		}
+
+		function createRule(removeCall: Function, rule: HTMLElement) {
 			const root = document.createElement('div')
 			root.className = 'cell-class-rule'
 
@@ -357,18 +511,13 @@ const AllCellClasses = new (class {
 			const remove = document.createElement('button')
 			remove.className = 'cell-class-rule-remove'
 			remove.textContent = 'remove'
-			remove.addEventListener('click',()=>{
+			remove.addEventListener('click', () => {
 				removeCall()
 				root.remove()
 			})
 			header.appendChild(remove)
 			header.appendChild(rule)
 			root.appendChild(header)
-			for (let i = 0; i < dataFields.length; i++) {
-				const data = dataFields[i]
-				if (data) root.appendChild(createRulesSection(data,nesting+1))
-			}
-				
 			return root
 		}
 
@@ -418,6 +567,17 @@ const AllCellClasses = new (class {
 	
 				dropdown.appendChild(withAnXChance)
 			}
+
+			const turnInto = document.createElement('button')
+			turnInto.textContent = 'turn into...'
+
+			turnInto.addEventListener('click', e=>{
+				e.stopPropagation()
+				console.log('clicked turn into')
+				const rule = document.createElement('p')
+				rule.textContent = 'turn into'
+				//Create dropdown
+			})
 
 			addNewButton.appendChild(dropdown)
 
