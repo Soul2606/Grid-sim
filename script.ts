@@ -28,7 +28,7 @@ type Instruction =
  | {
 	id:'with_an_x%_chance'
 	param:number
-	then:Instruction[]
+	then:Set<Instruction>
 }
  | {
 	id:'turn into'
@@ -75,9 +75,9 @@ class Cell {
 	privateVariables:Variable[]
 	isReference:boolean // Reference cells can be at multiple places at once
 	isFloating:boolean // Floating cells can overlap with other cells and do not block non floating cells
-	script:Instruction[]
-	private valueChangeCalls:Function[]
-	private onDeletionCalls:Set<(cell:Cell)=>void>
+	script:Set<Instruction>
+	private valueChangeCalls:Signal<Cell>
+	readonly onDeletion:Signal<Cell>
 	constructor({name, icon, publicVariables=[], privateVariables=[], isReference=false, isFloating=false}:{name:string, icon:string, publicVariables?:Variable[], privateVariables?:Variable[], isReference?:boolean, isFloating?:boolean}) {
 		this._name = name
 		this._icon = icon
@@ -85,13 +85,13 @@ class Cell {
 		this.isFloating = isFloating
 		this.publicVariables = [...publicVariables]
 		this.privateVariables = [...privateVariables]
-		this.script = []
-		this.valueChangeCalls = []
-		this.onDeletionCalls = new Set<(cell:Cell)=>void>()
+		this.script = new Set<Instruction>()
+		this.valueChangeCalls = new Signal<Cell>()
+		this.onDeletion = new Signal<Cell>()
 	}
 
 	private callChanges() {
-		this.valueChangeCalls.forEach(f=>f(this))
+		this.valueChangeCalls.send(this)
 	}
 
 	get name():string{
@@ -114,16 +114,7 @@ class Cell {
 	}
 
 	trackChanges(func:(cell:Cell)=>void){
-		if (this.valueChangeCalls.includes(func)) return
-		this.valueChangeCalls.push(func)
-	}
-
-	trackDelete(func:(cell:Cell)=>void){
-		this.onDeletionCalls.add(func)
-	}
-
-	callDelete(){
-		this.onDeletionCalls.forEach(f=>f(this))
+		this.valueChangeCalls.subscribe(func)
 	}
 }
 
@@ -138,6 +129,36 @@ class CellInstance {
 
 	tick(deltaMs:number){
 		// user added code is executed here
+	}
+}
+
+
+
+
+class Signal<P=unknown, R=void> {
+	private listeners:Set<(param:P)=>R>
+	constructor() {
+		this.listeners = new Set<(param:P)=>R>()
+	}
+
+	subscribe(fnc:(param:P)=>R){
+		this.listeners.add(fnc)
+		return ()=>this.unsubscribe(fnc)
+	}
+
+	unsubscribe(fnc:(param:P)=>R){
+		this.listeners.delete(fnc)
+		return this
+	}
+
+	clear(){
+		this.listeners.clear()
+	}
+
+	send(param:P):R[]{
+		const results:R[] = []
+		this.listeners.forEach(fnc=>results.push(fnc(param)))
+		return results
 	}
 }
 
@@ -318,137 +339,46 @@ function editableTextModule(element:HTMLElement, callbackFunction:(el:HTMLElemen
 
 
 
-function createDropdown(content: HTMLElement[], onSelect:(idx:number)=>void=()=>{}): HTMLElement {
-	// Container
-	const root = document.createElement('div');
-	root.className = 'dropdown';
+function createDropdown(options: string[], onSelect: (idx: number) => void = () => {}): HTMLElement {
+	const first = options[0]
+	if (!first) throw new Error("Cannot create a dropdown with no options");
+	
+	const container = document.createElement("div");
+	container.className = "dropdown";
 
-	// Toggle button
-	const toggle = document.createElement('button');
-	toggle.className = 'dropdown-toggle';
-	toggle.type = 'button';
-	toggle.textContent = 'Options';
-	toggle.setAttribute('aria-haspopup', 'true');
-	toggle.setAttribute('aria-expanded', 'false');
-
-	// Panel
-	const panel = document.createElement('div');
-	panel.className = 'dropdown-panel';
-	panel.tabIndex = -1; // allow programmatic focus
-	panel.hidden = true;
-	panel.setAttribute('role', 'menu');
-
-	// Normalize content items for keyboard nav
-	const items = content.map((el) => {
-		el.setAttribute('role', 'menuitem');
-		el.tabIndex = -1; // managed focus
-		el.classList.add('dropdown-panel-item')
-		return el;
-	});
-	items.forEach(el => panel.appendChild(el));
-
-	let open = false;
-	let lastFocusedIndex = 0;
-
-	function openPanel() {
-		if (open) return;
-		open = true;
-		panel.hidden = false;
-		toggle.setAttribute('aria-expanded', 'true');
-		// Focus first item
-		const firstItem = items[0]
-		if (firstItem) {
-			lastFocusedIndex = 0;
-			firstItem.tabIndex = 0;
-			firstItem.focus();
-		} else {
-			panel.focus();
-		}
-		document.addEventListener('mousedown', onOutsideClick, true);
-		document.addEventListener('keydown', onGlobalKeydown, true);
-	}
-
-	function closePanel() {
-		if (!open) return;
-		open = false;
-		panel.hidden = true;
-		toggle.setAttribute('aria-expanded', 'false');
-		// Reset tabbable state
-		items.forEach(i => (i.tabIndex = -1));
-		lastFocusedIndex = 0
-		document.removeEventListener('mousedown', onOutsideClick, true);
-		document.removeEventListener('keydown', onGlobalKeydown, true);
-		toggle.focus();
-	}
-
-	function onOutsideClick(e: MouseEvent) {
-		if (!root.contains(e.target as Node)) closePanel();
-	}
-
-	items.forEach((el, idx)=>{
-		el.addEventListener('click', e=>{
-			if (!open) return;
-			e.stopPropagation();
-			e.preventDefault();
-			onSelect(idx);
-			closePanel();
-		})
+	const button = document.createElement("button");
+	button.className = "dropdown-toggle";
+	button.textContent = first;
+	
+	const list = document.createElement("ul");
+	list.className = "dropdown-panel"; 
+	list.style.display = 'none'
+	list.addEventListener('mouseleave',()=>{
+		list.style.display = 'none'
 	})
+	
+	options.forEach((opt, idx) => {
+		const li = document.createElement("li");
+		li.className = "dropdown-panel-item";
+		li.textContent = opt;
+		
+		li.addEventListener("click", () => {
+			onSelect(idx);
+			list.style.display = 'none'
+			button.textContent = opt
+		});
+		
+		list.appendChild(li);
+	});
+	
+	container.appendChild(list);
+	container.appendChild(button);
 
-	function onGlobalKeydown(e: KeyboardEvent) {
-		if (e.key === 'Escape') {
-			e.preventDefault();
-			closePanel();
-			return;
-		}
-		// Menu navigation
-		if (!open || items.length === 0) return;
-		const max = items.length - 1;
-		const current = lastFocusedIndex;
-
-		const moveFocus = (next: number) => {
-			const currentItem = items[current]
-			if (currentItem) currentItem.tabIndex = -1;
-			lastFocusedIndex = Math.max(0, Math.min(max, next));
-			const nextItem = items[lastFocusedIndex]
-			if (nextItem) {
-				nextItem.tabIndex = 0;
-				nextItem.focus();
-			}
-		};
-
-		if (e.key === 'ArrowDown') {
-			e.preventDefault();
-			moveFocus(current + 1 > max ? 0 : current + 1);
-		} else if (e.key === 'ArrowUp') {
-			e.preventDefault();
-			moveFocus(current - 1 < 0 ? max : current - 1);
-		} else if (e.key === 'Home') {
-			e.preventDefault();
-			moveFocus(0);
-		} else if (e.key === 'End') {
-			e.preventDefault();
-			moveFocus(max);
-		} else if (e.key === 'Enter' || e.key === ' ') {
-			// Activate focused item (simulate click)
-			e.preventDefault();
-			items[lastFocusedIndex]?.click();
-		}
-	}
-
-	toggle.addEventListener('click', () => {
-		if (open) closePanel(); else openPanel();
+	button.addEventListener("click", () => {
+		list.style.display = ''
 	});
 
-	// Keep panel width aligned with the toggle
-	const resizeObserver = new ResizeObserver(() => {
-		panel.style.minWidth = `${toggle.getBoundingClientRect().width}px`;
-	});
-	resizeObserver.observe(toggle);
-
-	root.appendChild(toggle);
-	root.appendChild(panel);
-	return root;
+	return container;
 }
 
 
@@ -492,7 +422,7 @@ const AllCellClasses = new (class {
 
 	private updateList(){
 		const cells = this._cells
-		function createRecursiveRule(rule:HTMLElement, removeCall:Function=()=>{}, dataFields:Instruction[][], nesting:number):HTMLElement {
+		function createRecursiveRule(rule:HTMLElement, removeCall:Function=()=>{}, dataFields:Set<Instruction>[], nesting:number):HTMLElement {
 			const root = createRule(removeCall, rule)
 			for (let i = 0; i < dataFields.length; i++) {
 				const data = dataFields[i]
@@ -521,7 +451,7 @@ const AllCellClasses = new (class {
 			return root
 		}
 
-		function createRulesSection(data:Instruction[], nesting:number):HTMLElement {
+		function createRulesSection(data:Set<Instruction>, nesting:number):HTMLElement {
 			const root = document.createElement('div')
 			root.className = 'cell-class-rules'
 			root.style.marginLeft = rulesNestingDistance + 'px'
@@ -535,7 +465,7 @@ const AllCellClasses = new (class {
 			dropdown.tabIndex = 0
 			dropdown.className = 'cell-class-new-rule-dropdown'
 			dropdown.style.display = 'none'
-			const hide = ()=>{
+			const hideDropdown = ()=>{
 				dropdown.style.display = 'none'
 				activeDropdown = false
 			}
@@ -549,20 +479,19 @@ const AllCellClasses = new (class {
 					console.log('clicked with an X% chance')
 					const rule = document.createElement('p')
 					rule.textContent = 'with an X% chance'
-					const then:Instruction[] = []
+					const then = new Set<Instruction>()
 					const instruction:Instruction = {
 						id:'with_an_x%_chance',
 						param:0.5,
 						then:then
 					}
-					data.push(instruction)
+					data.add(instruction)
 					const newRule = createRecursiveRule(rule, ()=>{
-						const idx = data.findIndex(v=>v===instruction)
-						if (idx !== -1) data.splice(idx, 1)
+						data.delete(instruction)
 					}, [then], nesting)
 					root.appendChild(newRule)
 					console.log(cells)
-					hide()
+					hideDropdown()
 				})
 	
 				dropdown.appendChild(withAnXChance)
@@ -575,15 +504,39 @@ const AllCellClasses = new (class {
 				e.stopPropagation()
 				console.log('clicked turn into')
 				const rule = document.createElement('p')
-				rule.textContent = 'turn into'
-				//Create dropdown
+				const instruction:Instruction = {
+					id:'turn into',
+					param:'empty'
+				}
+				const dropdown = createDropdown(['empty'].concat(cells.map(cell=>cell.name)), idx=>{
+					if (idx === 0) {
+						instruction.param = 'empty'
+						return
+					}
+					const cell = cells[idx-1]
+					if (!cell) {
+						instruction.param = 'empty'
+						return
+					}
+					instruction.param = cell
+					cell.onDeletion.subscribe(()=>instruction.param = 'empty')
+				})
+				const span = document.createElement('span')
+				span.appendChild(dropdown)
+				rule.append('turn into', span)
+				root.appendChild(createRule(()=>{
+					data.delete(instruction)
+				},rule))
+				data.add(instruction)
+				hideDropdown()
 			})
 
+			dropdown.appendChild(turnInto)
 			addNewButton.appendChild(dropdown)
 
 			addNewButton.addEventListener('click',()=>{
 				if (activeDropdown) {
-					hide()
+					hideDropdown()
 					return
 				}
 				dropdown.style.display = ''
