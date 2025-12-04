@@ -387,20 +387,11 @@ function editableTextModule(element:HTMLElement, callbackFunction:(el:HTMLElemen
 
 
 
-function createDropdown(options: string[], onSelect: (idx: number) => void = () => {}, initialIdx?:number): HTMLElement {
-	const first = options[0]
-	if (!first) throw new Error("Cannot create a dropdown with no options");
-
-	console.log(initialIdx)
-	const initialOption = (initialIdx || initialIdx === 0) ? options[initialIdx] : null
-	if (initialOption === null) throw new Error("initialIdx is out of range");
-	
+function createDropdown(button:HTMLButtonElement, options: string[], onSelect: (idx: number) => void = () => {}): HTMLElement {	
 	const container = document.createElement("div");
 	container.className = "dropdown";
 
-	const button = document.createElement("button");
-	button.className = "dropdown-toggle";
-	button.textContent = initialOption ? initialOption : first;
+	button.classList.add("dropdown-toggle");
 	
 	const list = document.createElement("ul");
 	list.className = "dropdown-panel"; 
@@ -415,9 +406,8 @@ function createDropdown(options: string[], onSelect: (idx: number) => void = () 
 		li.textContent = opt;
 		
 		li.addEventListener("click", () => {
-			onSelect(idx);
 			list.style.display = 'none'
-			button.textContent = opt
+			onSelect(idx);
 		});
 		
 		list.appendChild(li);
@@ -512,7 +502,7 @@ const AllCellClasses = new (class {
 		}
 
 		function createRulesSection(data:Set<Instruction>, nesting:number):HTMLElement {
-			function createXChance(instruction: Instruction) {
+			function createXChance(instruction: Instruction):HTMLParagraphElement {
 				if (instruction.id !== 'with_an_x%_chance') throw new Error("Wrong instruction id, mut be 'with_an_x%_chance'");
 				const rule = document.createElement('p')
 				const input = document.createElement('input')
@@ -535,7 +525,10 @@ const AllCellClasses = new (class {
 				if (instruction.param !== 'empty') {
 					initialIdx = cells.findIndex(cell=>cell===instruction.param)+1
 				}
+				const options = ['empty'].concat(cells.map(cell => cell.name))
+				const openDropdown = document.createElement('button')
 				const onSelect = (idx:number)=>{
+					openDropdown.textContent = String(options[idx])
 					if (idx === 0) {
 						instruction.param = 'empty'
 						return
@@ -552,7 +545,7 @@ const AllCellClasses = new (class {
 					})
 				}
 				onSelect(initialIdx)
-				const dropdown = createDropdown(['empty'].concat(cells.map(cell => cell.name)), onSelect, initialIdx)
+				const dropdown = createDropdown(openDropdown, options, onSelect)
 				const span = document.createElement('span')
 				span.appendChild(dropdown)
 				rule.append('turn into', span)
@@ -567,65 +560,32 @@ const AllCellClasses = new (class {
 			addNewButton.className = 'cell-class-new-rule'
 			addNewButton.textContent = '+new'
 			
-			let activeDropdown = false
-			const dropdown = document.createElement('div')
-			dropdown.tabIndex = 0
-			dropdown.className = 'cell-class-new-rule-dropdown'
-			dropdown.style.display = 'none'
-			const hideDropdown = ()=>{
-				dropdown.style.display = 'none'
-				activeDropdown = false
-			}
-			
-			if (nesting < rulesNestingMax) {
-				const withAnXChance = document.createElement('button')
-				withAnXChance.textContent = 'With a X% chance...'
-	
-				withAnXChance.addEventListener('click', e=>{
-					e.stopPropagation()
-					console.log('clicked with an X% chance')
-					const then = new Set<Instruction>()
-					const instruction:Instruction = {
-						id:'with_an_x%_chance',
-						param:0.5,
-						then:then
+			const dropdown = createDropdown(addNewButton, ['With a X% chance...', 'turn into...'], idx=>{
+				if (idx === 0) {
+					if (nesting < rulesNestingMax) {
+						console.log('clicked with an X% chance')
+						const then = new Set<Instruction>()
+						const instruction:Instruction = {
+							id:'with_an_x%_chance',
+							param:0.5,
+							then:then
+						}
+						root.appendChild(createRecursiveRule(createXChance(instruction), data, instruction, [then], nesting))
+						console.log(cells)
+					}else{
+						console.log('max nesting reached', nesting)
 					}
-					root.appendChild(createRecursiveRule(createXChance(instruction), data, instruction, [then], nesting))
-					console.log(cells)
-					hideDropdown()
-				})
-	
-				dropdown.appendChild(withAnXChance)
-			}
-
-			const turnInto = document.createElement('button')
-			turnInto.textContent = 'turn into...'
-
-			turnInto.addEventListener('click', e=>{
-				e.stopPropagation()
-				console.log('clicked turn into')
-				const instruction:Instruction = {
-					id:'turn into',
-					param:'empty'
-				} 
-				root.appendChild(createRuleWrapper(createTurnInto(instruction), data, instruction))
-				hideDropdown()
-			})
-
-			dropdown.appendChild(turnInto)
-			addNewButton.appendChild(dropdown)
-
-			addNewButton.addEventListener('click',()=>{
-				if (activeDropdown) {
-					hideDropdown()
-					return
+				} else if (idx === 1) {
+					console.log('clicked turn into')
+					const instruction:Instruction = {
+						id:'turn into',
+						param:'empty'
+					} 
+					root.appendChild(createRuleWrapper(createTurnInto(instruction), data, instruction))
 				}
-				dropdown.style.display = ''
-				dropdown.style.minWidth = addNewButton.getBoundingClientRect().width + 'px'
-				activeDropdown = true
 			})
 
-			root.appendChild(addNewButton)
+			root.appendChild(dropdown)
 
 			data.forEach(instruction=>{
 				switch (instruction.id) {
@@ -634,8 +594,6 @@ const AllCellClasses = new (class {
 					break;
 					case "turn into":
 						root.appendChild(createRuleWrapper(createTurnInto(instruction), data, instruction))
-					break;
-					default:
 					break;
 				}
 			})
