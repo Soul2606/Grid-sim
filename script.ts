@@ -1,7 +1,4 @@
 console.log('hello world')
-/*
-To Do: fix memory leak related to Cell.onDelete
- */
 
 
 
@@ -126,12 +123,14 @@ class Cell {
 
 class CellInstance {
 	readonly cell:Cell
+	private script:CustomScript
 	constructor(cell:Cell) {
 		this.cell = cell
+		this.script = new CustomScript(cell.script, this)
 	}
 
 	tick(deltaMs:number){
-		// user added code is executed here
+		this.script.run()
 	}
 }
 
@@ -139,28 +138,43 @@ class CellInstance {
 
 
 class Signal<P=unknown, R=void> {
-	private listeners:Set<(param:P)=>R>
+	private listeners
+	private onceListener
 	constructor() {
 		this.listeners = new Set<(param:P)=>R>()
+		this.onceListener = new Set<(param:P)=>R>()
 	}
 
 	subscribe(fnc:(param:P)=>R){
+		this.unsubscribe(fnc)
 		this.listeners.add(fnc)
+		return ()=>this.unsubscribe(fnc)
+	}
+
+	once(fnc:(param:P)=>R){
+		this.unsubscribe(fnc)
+		this.onceListener.add(fnc)
 		return ()=>this.unsubscribe(fnc)
 	}
 
 	unsubscribe(fnc:(param:P)=>R){
 		this.listeners.delete(fnc)
+		this.onceListener.delete(fnc)
 		return this
 	}
 
 	clear(){
 		this.listeners.clear()
+		this.onceListener.clear()
 	}
 
 	send(param:P):R[]{
 		const results:R[] = []
 		this.listeners.forEach(fnc=>results.push(fnc(param)))
+		this.onceListener.forEach(fnc=>{
+			results.push(fnc(param))
+			this.onceListener.delete(fnc)
+		})
 		return results
 	}
 }
@@ -169,9 +183,32 @@ class Signal<P=unknown, R=void> {
 
 
 class CustomScript {
-	readonly instructions:Instruction[]
-	constructor(script:Instruction[]) {
+	readonly instructions:Set<Instruction>
+	readonly cellInst:CellInstance
+	readonly environment
+	constructor(script:Set<Instruction>, cellInst:CellInstance) {
 		this.instructions = script
+		this.cellInst = cellInst
+		this.environment = Grid
+	}
+
+	run(){
+		const r = (inst:Instruction):void=>{
+			switch (inst.id) {
+				case 'with_an_x%_chance':
+					if (Math.random() < inst.param/100) inst.then.forEach(r)
+				break;
+				case 'turn into':
+					const param = inst.param
+					if (param === 'empty') {
+						this.environment.getPositions(this.cellInst).forEach(pos=>this.environment.removeCell(pos))
+					}else{
+						this.environment.getPositions(this.cellInst).forEach(pos=>this.environment.setCell(new CellInstance(param), pos))
+					}
+				break;
+			}
+		}
+		this.instructions.forEach(r)
 	}
 }
 
@@ -206,15 +243,13 @@ const Grid = new (class {
 		this.elements.forEach(el=>el.value.textContent = entryMap.get(el.position.toKey()) ?? '')
 	}
 
-	getPosition(cell:CellInstance):Vector2D|null{
-		if (cell.cell.isReference) throw new Error("Cannot get position of a cell that is a reference. Use 'getPositions' instead");
-		const member = this.entries.find(ent=>ent.cell===cell)
-		if (member) return member.position
-		return null
+	private getCellInstances():CellInstance[] {
+		const set = new Set<CellInstance>()
+		this.entries.forEach(ent=>set.add(ent.cell))
+		return Array.from(set)
 	}
 
 	getPositions(cell:CellInstance):Vector2D[]{
-		if (!cell.cell.isReference) throw new Error("Cannot get positions of a cell that is not a reference. Use 'getPosition' instead");
 		return this.entries.filter(ent=>ent.cell===cell).map(ent=>ent.position)
 	}
 
@@ -268,6 +303,16 @@ const Grid = new (class {
 			elements.push({position,value:root})
 		}
 		this.elements = elements
+
+		let now = Date.now()
+		const tick = ()=>{
+			const deltaMs = Date.now()-now; now=Date.now();
+			this.getCellInstances().forEach(inst=>inst.tick(deltaMs))
+			console.log('tick')
+		}
+		let intervalID:number|undefined
+		clearInterval(intervalID)
+		intervalID = setInterval(tick, 50)
 	}
 })(new Vector2D(30,30));
 
@@ -423,14 +468,21 @@ const windowListener = (()=>{
 
 const AllCellClasses = new (class {
 	private _cells:Cell[]
+	private cellsOnDelete
 	constructor(){
 		this._cells = []
+		/**
+		 * Prevents memory leaks. Each signal is cleared before element structure is created, signals are used by the elements.
+		 */
+		this.cellsOnDelete = new Map<Cell, Signal<Cell>>()
 	}
 
 	private updateList(){
+		this.cellsOnDelete.forEach(signal=>signal.clear())
+		const onDeletion = this.cellsOnDelete
 		const cells = this._cells
 		function createRecursiveRule(rule:HTMLElement, data:Set<Instruction>, instruction:Instruction, dataFields:Set<Instruction>[], nesting:number):HTMLElement {
-			const root = createRule(rule, data, instruction)
+			const root = createRuleWrapper(rule, data, instruction)
 			for (let i = 0; i < dataFields.length; i++) {
 				const data = dataFields[i]
 				if (data) root.appendChild(createRulesSection(data,nesting+1))
@@ -438,7 +490,7 @@ const AllCellClasses = new (class {
 			return root
 		}
 
-		function createRule(rule: HTMLElement, data:Set<Instruction>, instruction:Instruction) {
+		function createRuleWrapper(rule: HTMLElement, data:Set<Instruction>, instruction:Instruction) {
 			const root = document.createElement('div')
 			root.className = 'cell-class-rule'
 
@@ -460,9 +512,19 @@ const AllCellClasses = new (class {
 		}
 
 		function createRulesSection(data:Set<Instruction>, nesting:number):HTMLElement {
-			function createXChance() {
+			function createXChance(instruction: Instruction) {
+				if (instruction.id !== 'with_an_x%_chance') throw new Error("Wrong instruction id, mut be 'with_an_x%_chance'");
 				const rule = document.createElement('p')
-				rule.textContent = 'with an X% chance'
+				const input = document.createElement('input')
+				input.type = 'number'
+				input.max = '100'
+				input.min = '0'
+				input.step = '0.1'
+				input.value = String(instruction.param)
+				input.addEventListener('input',()=>{
+					instruction.param = Number(input.value)
+				})
+				rule.append('with an', input, '% chance')
 				return rule
 			}
 
@@ -473,7 +535,7 @@ const AllCellClasses = new (class {
 				if (instruction.param !== 'empty') {
 					initialIdx = cells.findIndex(cell=>cell===instruction.param)+1
 				}
-				const dropdown = createDropdown(['empty'].concat(cells.map(cell => cell.name)), idx => {
+				const onSelect = (idx:number)=>{
 					if (idx === 0) {
 						instruction.param = 'empty'
 						return
@@ -484,8 +546,13 @@ const AllCellClasses = new (class {
 						return
 					}
 					instruction.param = cell
-					cell.onDeletion.subscribe(() => instruction.param = 'empty')
-				}, initialIdx)
+					onDeletion.get(cell)?.subscribe(() => {
+						instruction.param = 'empty'
+						AllCellClasses.updateList()
+					})
+				}
+				onSelect(initialIdx)
+				const dropdown = createDropdown(['empty'].concat(cells.map(cell => cell.name)), onSelect, initialIdx)
 				const span = document.createElement('span')
 				span.appendChild(dropdown)
 				rule.append('turn into', span)
@@ -495,19 +562,6 @@ const AllCellClasses = new (class {
 			const root = document.createElement('div')
 			root.className = 'cell-class-rules'
 			root.style.marginLeft = rulesNestingDistance + 'px'
-
-			data.forEach(instruction=>{
-				switch (instruction.id) {
-					case 'with_an_x%_chance':
-						root.appendChild(createRecursiveRule(createXChance(), data, instruction, [instruction.then], nesting))
-					break;
-					case "turn into":
-						root.appendChild(createRule(createTurnInto(instruction), data, instruction))
-					break;
-					default:
-					break;
-				}
-			})
 			
 			const addNewButton = document.createElement('button')
 			addNewButton.className = 'cell-class-new-rule'
@@ -530,14 +584,13 @@ const AllCellClasses = new (class {
 				withAnXChance.addEventListener('click', e=>{
 					e.stopPropagation()
 					console.log('clicked with an X% chance')
-					const rule = createXChance()
 					const then = new Set<Instruction>()
 					const instruction:Instruction = {
 						id:'with_an_x%_chance',
 						param:0.5,
 						then:then
 					}
-					root.appendChild(createRecursiveRule(rule, data, instruction, [then], nesting))
+					root.appendChild(createRecursiveRule(createXChance(instruction), data, instruction, [then], nesting))
 					console.log(cells)
 					hideDropdown()
 				})
@@ -555,7 +608,7 @@ const AllCellClasses = new (class {
 					id:'turn into',
 					param:'empty'
 				} 
-				root.appendChild(createRule(createTurnInto(instruction), data, instruction))
+				root.appendChild(createRuleWrapper(createTurnInto(instruction), data, instruction))
 				hideDropdown()
 			})
 
@@ -573,6 +626,19 @@ const AllCellClasses = new (class {
 			})
 
 			root.appendChild(addNewButton)
+
+			data.forEach(instruction=>{
+				switch (instruction.id) {
+					case 'with_an_x%_chance':
+						root.appendChild(createRecursiveRule(createXChance(instruction), data, instruction, [instruction.then], nesting))
+					break;
+					case "turn into":
+						root.appendChild(createRuleWrapper(createTurnInto(instruction), data, instruction))
+					break;
+					default:
+					break;
+				}
+			})
 
 			return root
 		}
@@ -629,6 +695,10 @@ const AllCellClasses = new (class {
 		if (this._cells.includes(cell)) return false
 		if (this._cells.some(v=>v.name === cell.name)) return false
 		this._cells.push(cell)
+		this.cellsOnDelete.set(cell,new Signal())
+		cell.onDeletion.once(()=>{
+			this.cellsOnDelete.get(cell)?.send(cell)
+		})
 		this.updateList()
 		return true
 	}
