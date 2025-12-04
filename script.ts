@@ -1,4 +1,7 @@
 console.log('hello world')
+/*
+To Do: fix memory leak related to Cell.onDelete
+ */
 
 
 
@@ -339,16 +342,20 @@ function editableTextModule(element:HTMLElement, callbackFunction:(el:HTMLElemen
 
 
 
-function createDropdown(options: string[], onSelect: (idx: number) => void = () => {}): HTMLElement {
+function createDropdown(options: string[], onSelect: (idx: number) => void = () => {}, initialIdx?:number): HTMLElement {
 	const first = options[0]
 	if (!first) throw new Error("Cannot create a dropdown with no options");
+
+	console.log(initialIdx)
+	const initialOption = (initialIdx || initialIdx === 0) ? options[initialIdx] : null
+	if (initialOption === null) throw new Error("initialIdx is out of range");
 	
 	const container = document.createElement("div");
 	container.className = "dropdown";
 
 	const button = document.createElement("button");
 	button.className = "dropdown-toggle";
-	button.textContent = first;
+	button.textContent = initialOption ? initialOption : first;
 	
 	const list = document.createElement("ul");
 	list.className = "dropdown-panel"; 
@@ -422,8 +429,8 @@ const AllCellClasses = new (class {
 
 	private updateList(){
 		const cells = this._cells
-		function createRecursiveRule(rule:HTMLElement, removeCall:Function=()=>{}, dataFields:Set<Instruction>[], nesting:number):HTMLElement {
-			const root = createRule(removeCall, rule)
+		function createRecursiveRule(rule:HTMLElement, data:Set<Instruction>, instruction:Instruction, dataFields:Set<Instruction>[], nesting:number):HTMLElement {
+			const root = createRule(rule, data, instruction)
 			for (let i = 0; i < dataFields.length; i++) {
 				const data = dataFields[i]
 				if (data) root.appendChild(createRulesSection(data,nesting+1))
@@ -431,7 +438,7 @@ const AllCellClasses = new (class {
 			return root
 		}
 
-		function createRule(removeCall: Function, rule: HTMLElement) {
+		function createRule(rule: HTMLElement, data:Set<Instruction>, instruction:Instruction) {
 			const root = document.createElement('div')
 			root.className = 'cell-class-rule'
 
@@ -441,8 +448,9 @@ const AllCellClasses = new (class {
 			const remove = document.createElement('button')
 			remove.className = 'cell-class-rule-remove'
 			remove.textContent = 'remove'
+			data.add(instruction)
 			remove.addEventListener('click', () => {
-				removeCall()
+				data.delete(instruction)
 				root.remove()
 			})
 			header.appendChild(remove)
@@ -452,9 +460,54 @@ const AllCellClasses = new (class {
 		}
 
 		function createRulesSection(data:Set<Instruction>, nesting:number):HTMLElement {
+			function createXChance() {
+				const rule = document.createElement('p')
+				rule.textContent = 'with an X% chance'
+				return rule
+			}
+
+			function createTurnInto(instruction: Instruction):HTMLParagraphElement {
+				const rule = document.createElement('p')
+				if (instruction.id !== 'turn into') throw new Error("Wrong instruction id, mut be 'turn into'");
+				let initialIdx = 0
+				if (instruction.param !== 'empty') {
+					initialIdx = cells.findIndex(cell=>cell===instruction.param)+1
+				}
+				const dropdown = createDropdown(['empty'].concat(cells.map(cell => cell.name)), idx => {
+					if (idx === 0) {
+						instruction.param = 'empty'
+						return
+					}
+					const cell = cells[idx - 1]
+					if (!cell) {
+						instruction.param = 'empty'
+						return
+					}
+					instruction.param = cell
+					cell.onDeletion.subscribe(() => instruction.param = 'empty')
+				}, initialIdx)
+				const span = document.createElement('span')
+				span.appendChild(dropdown)
+				rule.append('turn into', span)
+				return rule
+			}
+
 			const root = document.createElement('div')
 			root.className = 'cell-class-rules'
 			root.style.marginLeft = rulesNestingDistance + 'px'
+
+			data.forEach(instruction=>{
+				switch (instruction.id) {
+					case 'with_an_x%_chance':
+						root.appendChild(createRecursiveRule(createXChance(), data, instruction, [instruction.then], nesting))
+					break;
+					case "turn into":
+						root.appendChild(createRule(createTurnInto(instruction), data, instruction))
+					break;
+					default:
+					break;
+				}
+			})
 			
 			const addNewButton = document.createElement('button')
 			addNewButton.className = 'cell-class-new-rule'
@@ -477,19 +530,14 @@ const AllCellClasses = new (class {
 				withAnXChance.addEventListener('click', e=>{
 					e.stopPropagation()
 					console.log('clicked with an X% chance')
-					const rule = document.createElement('p')
-					rule.textContent = 'with an X% chance'
+					const rule = createXChance()
 					const then = new Set<Instruction>()
 					const instruction:Instruction = {
 						id:'with_an_x%_chance',
 						param:0.5,
 						then:then
 					}
-					data.add(instruction)
-					const newRule = createRecursiveRule(rule, ()=>{
-						data.delete(instruction)
-					}, [then], nesting)
-					root.appendChild(newRule)
+					root.appendChild(createRecursiveRule(rule, data, instruction, [then], nesting))
 					console.log(cells)
 					hideDropdown()
 				})
@@ -503,31 +551,11 @@ const AllCellClasses = new (class {
 			turnInto.addEventListener('click', e=>{
 				e.stopPropagation()
 				console.log('clicked turn into')
-				const rule = document.createElement('p')
 				const instruction:Instruction = {
 					id:'turn into',
 					param:'empty'
-				}
-				const dropdown = createDropdown(['empty'].concat(cells.map(cell=>cell.name)), idx=>{
-					if (idx === 0) {
-						instruction.param = 'empty'
-						return
-					}
-					const cell = cells[idx-1]
-					if (!cell) {
-						instruction.param = 'empty'
-						return
-					}
-					instruction.param = cell
-					cell.onDeletion.subscribe(()=>instruction.param = 'empty')
-				})
-				const span = document.createElement('span')
-				span.appendChild(dropdown)
-				rule.append('turn into', span)
-				root.appendChild(createRule(()=>{
-					data.delete(instruction)
-				},rule))
-				data.add(instruction)
+				} 
+				root.appendChild(createRule(createTurnInto(instruction), data, instruction))
 				hideDropdown()
 			})
 
