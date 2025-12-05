@@ -3,9 +3,62 @@ console.log('hello world')
 
 
 
-type Variable = {
-	name:string
-	val:string|number|boolean|null
+interface VariableSignals<T extends VariableTypes = VariableTypes> {
+	get changeSignal():SignalPublic<T>
+	get deleteSignal():SignalPublic<string>
+}
+type VariableTypes = number | string | boolean | null
+class Variable<T extends VariableTypes = VariableTypes> implements VariableSignals {
+	private _name
+	private _value:T
+	private changeSignalPrivate
+	private _changeNameSignal
+	private deleteSignalPrivate
+	constructor(name:string, value:T) {
+		this._name = name
+		this._value = value
+		this.changeSignalPrivate = new Signal<VariableTypes>()
+		this._changeNameSignal = new Signal<string>()
+		this.deleteSignalPrivate = new Signal<string>()
+	}
+
+	get name():string{
+		return this._name
+	}
+
+	set name(newName:string){
+		this._name = newName
+		this._changeNameSignal.send(newName)
+	}
+
+	get value():T {
+		return this._value
+	}
+	
+	set value(v:T) {
+		this._value = v;
+		this.changeSignalPrivate.send(v)
+	}
+
+	get changeSignal(){
+		return this.changeSignalPrivate.createPublic()
+	}
+
+	get changeNameSignal(){
+		return this._changeNameSignal.createPublic()
+	}
+
+	get deleteSignal(){
+		return this.deleteSignalPrivate.createPublic()
+	}
+
+	getTypeName():string{
+		return this._value === null? 'null' : typeof this._value
+	}
+
+	callDelete(){
+		this.deleteSignalPrivate.send(this._name)
+	}
 }
 
 
@@ -33,6 +86,11 @@ type Instruction =
  | {
 	id:'turn into'
 	param:Cell|'empty'
+}
+ | {
+	id:'if'
+	param:Variable<boolean>
+	then:Set<Instruction>
 }
 
 
@@ -71,20 +129,18 @@ class Vector2D {
 class Cell {
 	private _name:string
 	private _icon:string
-	publicVariables:Variable[]
-	privateVariables:Variable[]
+	private variables:Set<Variable>
 	isReference:boolean // Reference cells can be at multiple places at once
 	isFloating:boolean // Floating cells can overlap with other cells and do not block non floating cells
 	script:Set<Instruction>
 	private valueChangeCalls:Signal<Cell>
 	readonly onDeletion:Signal<Cell>
-	constructor({name, icon, publicVariables=[], privateVariables=[], isReference=false, isFloating=false}:{name:string, icon:string, publicVariables?:Variable[], privateVariables?:Variable[], isReference?:boolean, isFloating?:boolean}) {
+	constructor({name, icon, isReference=false, isFloating=false}:{name:string, icon:string, isReference?:boolean, isFloating?:boolean}) {
 		this._name = name
 		this._icon = icon
 		this.isReference = isReference
 		this.isFloating = isFloating
-		this.publicVariables = [...publicVariables]
-		this.privateVariables = [...privateVariables]
+		this.variables = new Set<Variable>()
 		this.script = new Set<Instruction>()
 		this.valueChangeCalls = new Signal<Cell>()
 		this.onDeletion = new Signal<Cell>()
@@ -115,6 +171,27 @@ class Cell {
 
 	trackChanges(func:(cell:Cell)=>void){
 		this.valueChangeCalls.subscribe(func)
+	}
+
+	addVariable<T extends VariableTypes>(name:string, value:T){
+		if (Array.from(this.variables).some(v=>v.name === name)) {
+			console.log('a variable with this name already exist. name: ', name)
+			return null
+		}
+		const variable = new Variable<T>(name, value)
+		this.variables.add(variable)
+		return variable
+	}
+
+	deleteVariable(name:string):boolean{
+		const variable = Array.from(this.variables).find(v=>v.name === name)
+		if (!variable) return false
+		this.variables.delete(variable)
+		return true
+	}
+
+	getVariables():readonly Variable[]{
+		return Array.from(this.variables)
 	}
 }
 
@@ -173,9 +250,42 @@ class Signal<P=unknown, R=void> {
 		this.listeners.forEach(fnc=>results.push(fnc(param)))
 		this.onceListener.forEach(fnc=>{
 			results.push(fnc(param))
-			this.onceListener.delete(fnc)
 		})
+		this.onceListener.clear()
 		return results
+	}
+
+	createPublic(){
+		return new SignalPublic(this)
+	}
+}
+
+// A class exposing only subscriber-management methods.
+// No access to send().
+class SignalPublic<P = unknown, R = void> {
+	private readonly signal: Signal<P, R>;
+
+	constructor(signal: Signal<P, R>) {
+		this.signal = signal;
+	}
+
+	subscribe(fnc: (param: P) => R):()=>void {
+		return this.signal.subscribe(fnc);
+	}
+
+	once(fnc: (param: P) => R) {
+		this.signal.once(fnc);
+		return this
+	}
+
+	unsubscribe(fnc: (param: P) => R) {
+		this.signal.unsubscribe(fnc);
+		return this
+	}
+
+	clear() {
+		this.signal.clear();
+		return this
 	}
 }
 
@@ -425,6 +535,32 @@ function createDropdown(button:HTMLButtonElement, options: string[], onSelect: (
 
 
 
+function createVariable(variable:Variable, unsubscribeSignal:Signal):HTMLElement {
+	const root = document.createElement('div')
+	root.className = 'variable'
+	const name = document.createElement('p')
+	name.className = 'variable-name'
+	name.textContent = variable.name
+	//This might looks confusing, .subscribe() returns an unsubscribe() function. that's the function that is being called once when the unsubscribeSignal is sent
+	unsubscribeSignal.once(variable.changeNameSignal.subscribe(newName=>name.textContent = newName))
+	root.append(name)
+
+	const type = document.createElement('p')
+	type.className = 'variable-type'
+	type.textContent = variable.getTypeName()
+	root.append(type)
+
+	const value = document.createElement('p')
+	value.className = 'variable-value'
+	value.textContent = String(variable.value)
+	unsubscribeSignal.once(variable.changeSignal.subscribe((newValue)=>value.textContent = String(newValue)))
+	root.append(value)
+
+	return root
+}
+
+
+
 
 const cellClassesListElement = document.getElementById('cell-classes-list'); if (!cellClassesListElement) throw new Error("could not find 'cell-classes-list'");
 const newCellButton = document.getElementById('new-cell-button');if (!newCellButton) throw new Error("Could not find 'new-cell-button'");
@@ -458,9 +594,11 @@ const windowListener = (()=>{
 
 const AllCellClasses = new (class {
 	private _cells:Cell[]
+	private updateListSignal
 	private cellsOnDelete
 	constructor(){
 		this._cells = []
+		this.updateListSignal = new Signal()
 		/**
 		 * Prevents memory leaks. Each signal is cleared before element structure is created, signals are used by the elements.
 		 */
@@ -468,7 +606,9 @@ const AllCellClasses = new (class {
 	}
 
 	private updateList(){
+		this.updateListSignal.send(null)
 		this.cellsOnDelete.forEach(signal=>signal.clear())
+		const resetEverythingSignal = this.updateListSignal
 		const onDeletion = this.cellsOnDelete
 		const cells = this._cells
 		function createRecursiveRule(rule:HTMLElement, data:Set<Instruction>, instruction:Instruction, dataFields:Set<Instruction>[], nesting:number):HTMLElement {
@@ -634,7 +774,24 @@ const AllCellClasses = new (class {
 
 			const settings = document.createElement('div')
 			settings.className = 'cell-class-settings'
+			settings.textContent = 'Options: coming soon...'
 			root.appendChild(settings)
+	
+			const variablesLi = document.createElement('div')
+			variablesLi.className = 'cell-class-variables-list'
+			variablesLi.appendChild((()=>{
+				const root = document.createElement('button')
+				root.className = 'create-new-variable-button'
+				root.textContent = 'New Variable'
+				root.addEventListener('click',()=>{
+					const newVar = cell.addVariable<number>('new variable', 0)
+					console.log(newVar, cell)
+					if (!newVar) return
+					variablesLi.appendChild(createVariable(newVar, resetEverythingSignal))
+				})
+				return root
+			})())
+			root.appendChild(variablesLi)
 
 			root.appendChild(createRulesSection(cell.script, 0))
 

@@ -2,7 +2,9 @@
 :root{
     --background:#ffffff;
     --text:#1A1A1A;
-    --secondary-text:#555555;
+    --text-keyword:#0000FF;
+    --text-variables:#001080;
+    --text-type:#108d20;
     --surface:#F5F5F5;
     --accent:#0078D4;
     --accent-hover:#005A9E;
@@ -12,7 +14,9 @@
 :root.dark{
     --background:#121212;
     --text:#ffffff;
-    --secondary-text:#AAAAAA;
+    --text-keyword:#569CD6;
+    --text-variables:#9CDCFE;
+    --text-type:#6fd6af;
     --surface:#1E1E1E;
     --accent:#4F9DFF;
     --accent-hover:#1A73E8;
@@ -126,4 +130,25 @@ main{
 
 .cell-class-rule-header{
     display: flex;
+}
+
+.variable{
+    display: flex;
+}
+
+.variable>p{
+    margin: 0 5px;
+    background-color: var(--background);
+}
+
+.variable-name{
+    color: var(--text-keyword);
+}
+
+.variable-type{
+    color: var(--text-type);
+}
+
+.variable-value{
+    color: var(--text-variables);
 }
