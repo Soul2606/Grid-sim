@@ -761,29 +761,18 @@ const AllCellClasses = new (class {
 			function createTurnInto(instruction: Instruction):HTMLParagraphElement {
 				const rule = document.createElement('p')
 				if (instruction.id !== 'turn into') throw new Error("Wrong instruction id, must be 'turn into'");
-				let initialIdx = 0
-				if (instruction.param !== 'empty') {
-					initialIdx = cells.findIndex(cell=>cell===instruction.param)+1
-				}
-				const options = ['empty'].concat(cells.map(cell => cell.name))
-				const openDropdown = document.createElement('button')
-				const onSelect = (idx:number)=>{
-					openDropdown.textContent = String(options[idx])
-					if (idx === 0) {
-						instruction.param = 'empty'
-						return
-					}
-					const cell = cells[idx - 1]
-					if (!cell) {
-						instruction.param = 'empty'
-						return
-					}
-					instruction.param = cell
-				}
-				onSelect(initialIdx)
-				const dropdown = createDropdown(openDropdown, options, onSelect)
+				
 				const span = document.createElement('span')
-				span.appendChild(dropdown)
+				const p = ()=>{
+					removeAllChildren(span)
+					const dropdown = createCellSelectionDropdown(instruction.param, cells, selected=>{
+						instruction.param = selected
+					})
+					span.appendChild(dropdown)
+				}
+
+				p()
+				onChange.subscribe(p)
 				rule.append('turn into', span)
 				return rule
 			}
