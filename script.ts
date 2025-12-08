@@ -628,7 +628,8 @@ function createVariable(variable:Variable, unsubscribeSignal:Signal):HTMLElement
 
 
 
-function createCellSelectionDropdown(initial:'empty'|Cell, cells:Cell[], onSelect:(selected:'empty'|Cell)=>void=()=>{}):HTMLElement {
+function createCellSelectionDropdown(initial:'empty'|Cell, onSelect:(selected:'empty'|Cell)=>void=()=>{}):HTMLElement {
+	const cells = AllCellClasses.cells
 	let initialIdx = 0
 	if (initial !== 'empty') {
 		initialIdx = cells.findIndex(cell=>cell===initial)+1
@@ -654,6 +655,182 @@ function createCellSelectionDropdown(initial:'empty'|Cell, cells:Cell[], onSelec
 	_onSelect(initialIdx)
 	return createDropdown(openDropdown, options, _onSelect)
 }
+
+
+
+function createRecursiveRule(rule:HTMLElement, data:Set<Instruction>, instruction:Instruction, dataFields:Set<Instruction>[], nesting:number):HTMLElement {
+	const root = createRuleWrapper(rule, data, instruction)
+	for (let i = 0; i < dataFields.length; i++) {
+		const data = dataFields[i]
+		if (data) root.appendChild(createRulesSection(data,nesting+1))
+	}
+	return root
+}
+
+
+
+function createRuleWrapper(rule: HTMLElement, data:Set<Instruction>, instruction:Instruction) {
+	const root = document.createElement('div')
+	root.className = 'cell-class-rule'
+
+	const header = document.createElement('div')
+	header.className = 'cell-class-rule-header'
+
+	const remove = document.createElement('button')
+	remove.className = 'cell-class-rule-remove'
+	remove.textContent = 'remove'
+	data.add(instruction)
+	remove.addEventListener('click', () => {
+		data.delete(instruction)
+		root.remove()
+	})
+	header.appendChild(remove)
+	header.appendChild(rule)
+	root.appendChild(header)
+	return root
+}
+
+
+
+function createRulesSection(data:Set<Instruction>, nesting:number):HTMLElement {
+	function createXChance(instruction: Instruction):HTMLParagraphElement {
+		if (instruction.id !== 'with_an_x%_chance') throw new Error("Wrong instruction id, must be 'with_an_x%_chance'");
+		const rule = document.createElement('p')
+		const input = document.createElement('input')
+		input.type = 'number'
+		input.max = '100'
+		input.min = '0'
+		input.step = '0.1'
+		input.value = String(instruction.param)
+		input.addEventListener('input',()=>{
+			instruction.param = Number(input.value)
+		})
+		rule.append('with an', input, '% chance')
+		return rule
+	}
+
+	function createTurnInto(instruction: Instruction):HTMLParagraphElement {
+		const rule = document.createElement('p')
+		if (instruction.id !== 'turn into') throw new Error("Wrong instruction id, must be 'turn into'");
+		
+		const span = document.createElement('span')
+		const p = ()=>{
+			removeAllChildren(span)
+			const dropdown = createCellSelectionDropdown(instruction.param, selected=>{
+				instruction.param = selected
+			})
+			span.appendChild(dropdown)
+		}
+
+		p()
+		AllCellClasses.onChange.subscribe(p)
+		rule.append('turn into', span)
+		return rule
+	}
+
+	function createIfNeighbor(instruction:Instruction):HTMLParagraphElement {
+		if (instruction.id !== 'if neighbors') throw new Error("Wrong instruction id, must be 'if neighbors'");
+		const rule = document.createElement('p')
+		const p = ()=>{
+			removeAllChildren(rule)
+			const selectCondition = (()=>{
+				const selectConditionButton = document.createElement('button')
+				selectConditionButton.textContent = instruction.param.condition
+				const arr = ['at least','at most','less than','more than','exactly'] as const
+				return createDropdown(selectConditionButton, arr, idx=>{						 
+					selectConditionButton.textContent = arr[idx]
+					instruction.param.condition = arr[idx]
+				})
+			})()
+
+			const selectValue = document.createElement('input')
+			selectValue.type = 'number'
+			selectValue.max = '8'
+			selectValue.min = '0'
+			selectValue.value = String(instruction.param.value)
+			selectValue.addEventListener('input',()=>{
+				instruction.param.value = Number(selectValue.value)
+			})
+
+			const selectCell = createCellSelectionDropdown(instruction.param.cell, selected=>{
+				instruction.param.cell = selected
+			})
+
+			rule.append('if', selectCondition, selectValue, 'are', selectCell)
+		}
+		p()
+		AllCellClasses.onChange.subscribe(p)
+		return rule
+	}
+
+	const root = document.createElement('div')
+	root.className = 'cell-class-rules'
+	root.style.marginLeft = rulesNestingDistance + 'px'
+	
+	const addNewButton = document.createElement('button')
+	addNewButton.className = 'cell-class-new-rule'
+	addNewButton.textContent = '+new'
+	
+	const dropdown = createDropdown(addNewButton, ['With a X% chance...', 'turn into...', 'If neighbors...'], idx=>{
+		if (idx === 0) {
+			if (nesting < rulesNestingMax) {
+				console.log('clicked with an X% chance')
+				const then = new Set<Instruction>()
+				const instruction:Instruction = {
+					id:'with_an_x%_chance',
+					param:0.5,
+					then:then
+				}
+				root.appendChild(createRecursiveRule(createXChance(instruction), data, instruction, [then], nesting))
+			}else{
+				console.log('max nesting reached', nesting)
+			}
+		} else if (idx === 1) {
+			console.log('clicked turn into')
+			const instruction:Instruction = {
+				id:'turn into',
+				param:'empty'
+			} 
+			root.appendChild(createRuleWrapper(createTurnInto(instruction), data, instruction))
+		} else if (idx ===2) {
+			if (nesting < rulesNestingMax) {
+				console.log('If neighbors')
+				const then = new Set<Instruction>()
+				const instruction:Instruction = {
+					id:'if neighbors',
+					param:{
+						condition:'at least',
+						value:1,
+						cell:'empty'
+					},
+					then:then
+				}
+				root.appendChild(createRecursiveRule(createIfNeighbor(instruction),data, instruction, [then], nesting))
+			} else {
+				console.log('max nesting reached', nesting)
+			}
+		}
+	})
+
+	root.appendChild(dropdown)
+
+	data.forEach(instruction=>{
+		switch (instruction.id) {
+			case 'with_an_x%_chance':
+				root.appendChild(createRecursiveRule(createXChance(instruction), data, instruction, [instruction.then], nesting))
+			break;
+			case "turn into":
+				root.appendChild(createRuleWrapper(createTurnInto(instruction), data, instruction))
+			break;
+			case "if neighbors":
+				root.appendChild(createRecursiveRule(createIfNeighbor(instruction), data, instruction, [instruction.then], nesting))
+			break;
+		}
+	})
+
+	return root
+}
+
 
 
 
@@ -706,180 +883,8 @@ const AllCellClasses = new (class {
 	private updateList(){
 		this.resetEverything.send(null)
 		this.cellsOnDelete.clear()
-		const onDeletion = this.cellsOnDelete
 		this.cellsOnChange.clear()
-		const onChange = this.cellsOnChange
 		const resetEverythingSignal = this.resetEverything
-		const cells = this._cells
-		function createRecursiveRule(rule:HTMLElement, data:Set<Instruction>, instruction:Instruction, dataFields:Set<Instruction>[], nesting:number):HTMLElement {
-			const root = createRuleWrapper(rule, data, instruction)
-			for (let i = 0; i < dataFields.length; i++) {
-				const data = dataFields[i]
-				if (data) root.appendChild(createRulesSection(data,nesting+1))
-			}
-			return root
-		}
-
-		function createRuleWrapper(rule: HTMLElement, data:Set<Instruction>, instruction:Instruction) {
-			const root = document.createElement('div')
-			root.className = 'cell-class-rule'
-
-			const header = document.createElement('div')
-			header.className = 'cell-class-rule-header'
-
-			const remove = document.createElement('button')
-			remove.className = 'cell-class-rule-remove'
-			remove.textContent = 'remove'
-			data.add(instruction)
-			remove.addEventListener('click', () => {
-				data.delete(instruction)
-				root.remove()
-			})
-			header.appendChild(remove)
-			header.appendChild(rule)
-			root.appendChild(header)
-			return root
-		}
-
-		function createRulesSection(data:Set<Instruction>, nesting:number):HTMLElement {
-			function createXChance(instruction: Instruction):HTMLParagraphElement {
-				if (instruction.id !== 'with_an_x%_chance') throw new Error("Wrong instruction id, must be 'with_an_x%_chance'");
-				const rule = document.createElement('p')
-				const input = document.createElement('input')
-				input.type = 'number'
-				input.max = '100'
-				input.min = '0'
-				input.step = '0.1'
-				input.value = String(instruction.param)
-				input.addEventListener('input',()=>{
-					instruction.param = Number(input.value)
-				})
-				rule.append('with an', input, '% chance')
-				return rule
-			}
-
-			function createTurnInto(instruction: Instruction):HTMLParagraphElement {
-				const rule = document.createElement('p')
-				if (instruction.id !== 'turn into') throw new Error("Wrong instruction id, must be 'turn into'");
-				
-				const span = document.createElement('span')
-				const p = ()=>{
-					removeAllChildren(span)
-					const dropdown = createCellSelectionDropdown(instruction.param, cells, selected=>{
-						instruction.param = selected
-					})
-					span.appendChild(dropdown)
-				}
-
-				p()
-				onChange.subscribe(p)
-				rule.append('turn into', span)
-				return rule
-			}
-
-			function createIfNeighbor(instruction:Instruction):HTMLParagraphElement {
-				if (instruction.id !== 'if neighbors') throw new Error("Wrong instruction id, must be 'if neighbors'");
-				const rule = document.createElement('p')
-				const p = ()=>{
-					removeAllChildren(rule)
-					const selectCondition = (()=>{
-						const selectConditionButton = document.createElement('button')
-						selectConditionButton.textContent = instruction.param.condition
-						const arr = ['at least','at most','less than','more than','exactly'] as const
-						return createDropdown(selectConditionButton, arr, idx=>{						 
-							selectConditionButton.textContent = arr[idx]
-							instruction.param.condition = arr[idx]
-						})
-					})()
-
-					const selectValue = document.createElement('input')
-					selectValue.type = 'number'
-					selectValue.max = '8'
-					selectValue.min = '0'
-					selectValue.value = String(instruction.param.value)
-					selectValue.addEventListener('input',()=>{
-						instruction.param.value = Number(selectValue.value)
-					})
-
-					const selectCell = createCellSelectionDropdown(instruction.param.cell, cells, selected=>{
-						instruction.param.cell = selected
-					})
-
-					rule.append('if', selectCondition, selectValue, 'are', selectCell)
-				}
-				p()
-				onChange.subscribe(p)
-				return rule
-			}
-
-			const root = document.createElement('div')
-			root.className = 'cell-class-rules'
-			root.style.marginLeft = rulesNestingDistance + 'px'
-			
-			const addNewButton = document.createElement('button')
-			addNewButton.className = 'cell-class-new-rule'
-			addNewButton.textContent = '+new'
-			
-			const dropdown = createDropdown(addNewButton, ['With a X% chance...', 'turn into...', 'If neighbors...'], idx=>{
-				if (idx === 0) {
-					if (nesting < rulesNestingMax) {
-						console.log('clicked with an X% chance')
-						const then = new Set<Instruction>()
-						const instruction:Instruction = {
-							id:'with_an_x%_chance',
-							param:0.5,
-							then:then
-						}
-						root.appendChild(createRecursiveRule(createXChance(instruction), data, instruction, [then], nesting))
-						console.log(cells)
-					}else{
-						console.log('max nesting reached', nesting)
-					}
-				} else if (idx === 1) {
-					console.log('clicked turn into')
-					const instruction:Instruction = {
-						id:'turn into',
-						param:'empty'
-					} 
-					root.appendChild(createRuleWrapper(createTurnInto(instruction), data, instruction))
-				} else if (idx ===2) {
-					if (nesting < rulesNestingMax) {
-						console.log('If neighbors')
-						const then = new Set<Instruction>()
-						const instruction:Instruction = {
-							id:'if neighbors',
-							param:{
-								condition:'at least',
-								value:1,
-								cell:'empty'
-							},
-							then:then
-						}
-						root.appendChild(createRecursiveRule(createIfNeighbor(instruction),data, instruction, [then], nesting))
-					} else {
-						console.log('max nesting reached', nesting)
-					}
-				}
-			})
-
-			root.appendChild(dropdown)
-
-			data.forEach(instruction=>{
-				switch (instruction.id) {
-					case 'with_an_x%_chance':
-						root.appendChild(createRecursiveRule(createXChance(instruction), data, instruction, [instruction.then], nesting))
-					break;
-					case "turn into":
-						root.appendChild(createRuleWrapper(createTurnInto(instruction), data, instruction))
-					break;
-					case "if neighbors":
-						root.appendChild(createRecursiveRule(createIfNeighbor(instruction), data, instruction, [instruction.then], nesting))
-					break;
-				}
-			})
-
-			return root
-		}
 
 		function createCell(cell:Cell) {
 			const root = document.createElement('div')
@@ -894,7 +899,7 @@ const AllCellClasses = new (class {
 			editableTextModule(icon, (el,newText)=>{
 				cell.icon = newText
 			},{onInput:'call'})
-			onChange.subscribe(()=>{
+			AllCellClasses.onChange.subscribe(()=>{
 				icon.textContent = cell.icon
 			})
 			header.appendChild(icon)
@@ -939,11 +944,15 @@ const AllCellClasses = new (class {
 		}
 
 		removeAllChildren(cellClassesListElement)
-		this._cells.map(createCell).forEach(val=>cellClassesListElement.appendChild(val))
+		this._cells.map(cell=>createCell(cell)).forEach(val=>cellClassesListElement.appendChild(val))
 	}
 
 	get cells():readonly Cell[]{
 		return this._cells
+	}
+
+	get onChange(){
+		return this.cellsOnChange.createPublic()
 	}
 
 	addCell(cell:Cell):boolean{
