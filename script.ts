@@ -1,6 +1,8 @@
 console.log('hello world')
 
 
+type ArrayIndex<T extends readonly unknown[]> = Extract<keyof T, `${number}`> extends `${infer N extends number}` ? N : never;
+
 
 
 interface VariableSignals<T extends VariableTypes = VariableTypes> {
@@ -77,6 +79,25 @@ type Entry<T> = {
 
 
 
+type NumberComparison = 'at least'|'at most'|'less than'|'more than'|'exactly'
+function numComp(value:number, op:NumberComparison, comparison:number):boolean{
+	switch (op) {
+		case 'at least':
+			return value >= comparison
+		case "at most":
+			return value <= comparison
+		case "less than":
+			return value < comparison
+		case "more than":
+			return value > comparison
+		case "exactly":
+			return value === comparison
+		default:
+			console.warn('numComp has missing case')
+		return false
+	}
+}
+
 type Instruction = 
  | {
 	id:'with_an_x%_chance'
@@ -88,8 +109,8 @@ type Instruction =
 	param:Cell|'empty'
 }
  | {
-	id:'if'
-	param:Variable<boolean>
+	id:'if neighbors'
+	param:{condition:NumberComparison, value:number, cell:Cell|'empty'}
 	then:Set<Instruction>
 }
 
@@ -169,8 +190,8 @@ class Cell {
 		this.callChanges()
 	}
 
-	trackChanges(func:(cell:Cell)=>void){
-		this.valueChangeCalls.subscribe(func)
+	get onChange(){
+		return this.valueChangeCalls.createPublic()
 	}
 
 	addVariable<T extends VariableTypes>(name:string, value:T){
@@ -316,6 +337,11 @@ class CustomScript {
 						this.environment.getPositions(this.cellInst).forEach(pos=>this.environment.setCell(new CellInstance(param), pos))
 					}
 				break;
+				case "if neighbors":
+					if (numComp(this.environment.getNeighbors(this.cellInst).filter(ent=>ent.cell.cell === inst.param.cell).length, inst.param.condition, inst.param.value)) {
+						inst.then.forEach(r)
+					}
+				break;
 			}
 		}
 		this.instructions.forEach(r)
@@ -388,6 +414,33 @@ const Grid = new (class {
 		return this
 	}
 
+	getNeighbors(cell: CellInstance): CellEntry[] {
+		const entries: CellEntry[] = this.getPositions(cell).map(pos => ({ cell, position: pos }));
+
+		// Define all relative neighbor offsets (including diagonals + same cell)
+		const offsets = [
+			{ x: 0, y: 0 },   // same position
+			{ x: 0, y: 1 },   // up
+			{ x: 0, y: -1 },  // down
+			{ x: 1, y: 0 },   // right
+			{ x: 1, y: 1 },   // top-right
+			{ x: 1, y: -1 },  // bottom-right
+			{ x: -1, y: 0 },  // left
+			{ x: -1, y: 1 },  // top-left
+			{ x: -1, y: -1 }  // bottom-left
+		];
+
+		return this.entries.filter(tent =>
+			entries.some(ent =>
+				offsets.some(offset =>
+					tent.position.x === ent.position.x + offset.x &&
+					tent.position.y === ent.position.y + offset.y
+				) && tent.cell !== ent.cell // exclude itself
+			)
+		);
+	}
+
+
 	startSimulation(){
 		const mainGrid = document.getElementById('main-grid')
 		if (!mainGrid) throw new Error("Could not find 'main-grid'");
@@ -441,8 +494,7 @@ function removeAllChildren(element:HTMLElement):Element[] {
 
 
 
-// Todo: fix enterOnInput to work with emoji's. the solution probably involves composition and addEventListener("compositionstart") and end
-function editableTextModule(element:HTMLElement, callbackFunction:(el:HTMLElement, newText:string, oldText:string)=>void, options:{enterOnInput?:true}={}){
+function editableTextModule(element:HTMLElement, callbackFunction:(el:HTMLElement, newText:string, oldText:string)=>void, options:{onInput?:'call'}={}){
 	if (element.children.length > 0) {
 		console.error(element)
 		throw new Error("Element must not have any non text children");
@@ -456,9 +508,10 @@ function editableTextModule(element:HTMLElement, callbackFunction:(el:HTMLElemen
 
     let shouldRevert = true
     let originalText = element.textContent
+	let isComposing = false
 
 	function enterText() {
-		callbackFunction(element, element.textContent, originalText)
+		if (options.onInput !== 'call') callbackFunction(element, element.textContent, originalText)
         originalText = element.textContent
         shouldRevert = false
         element.blur()
@@ -477,7 +530,7 @@ function editableTextModule(element:HTMLElement, callbackFunction:(el:HTMLElemen
         element.textContent = originalText
     })
 
-	if (!options.enterOnInput) {
+	if (options.onInput !== 'call') {
 		element.addEventListener('keydown',e=>{
 			if (e.key !== 'Enter') {
 				return
@@ -486,18 +539,32 @@ function editableTextModule(element:HTMLElement, callbackFunction:(el:HTMLElemen
 			enterText()
 		})
 	}
-    
-    element.addEventListener('input',(e)=>{
-		if (options.enterOnInput) {
-			enterText()
+
+	element.addEventListener('compositionstart', ()=>isComposing = true)
+	element.addEventListener('compositionend', ()=>{
+		isComposing = false
+		if (options.onInput === 'call') {
+			callbackFunction(element, element.textContent, originalText)
+			originalText = element.textContent
+			shouldRevert = false
 		}
-        shouldRevert = true
-    })
+	})
+
+	element.addEventListener('input',()=>{
+		if (options.onInput === 'call') {
+			if (isComposing) return
+			callbackFunction(element, element.textContent, originalText)
+			originalText = element.textContent
+			shouldRevert = false
+		} else {
+			shouldRevert = true
+		}
+	})
 }
 
 
 
-function createDropdown(button:HTMLButtonElement, options: string[], onSelect: (idx: number) => void = () => {}): HTMLElement {	
+function createDropdown<T extends readonly string[]>(button:HTMLButtonElement, options: T, onSelect: (idx: ArrayIndex<T>) => void = () => {}): HTMLElement {	
 	const container = document.createElement("div");
 	container.className = "dropdown";
 
@@ -517,7 +584,7 @@ function createDropdown(button:HTMLButtonElement, options: string[], onSelect: (
 		
 		li.addEventListener("click", () => {
 			list.style.display = 'none'
-			onSelect(idx);
+			onSelect(idx as ArrayIndex<T>);
 		});
 		
 		list.appendChild(li);
@@ -561,6 +628,35 @@ function createVariable(variable:Variable, unsubscribeSignal:Signal):HTMLElement
 
 
 
+function createCellSelectionDropdown(initial:'empty'|Cell, cells:Cell[], onSelect:(selected:'empty'|Cell)=>void=()=>{}):HTMLElement {
+	let initialIdx = 0
+	if (initial !== 'empty') {
+		initialIdx = cells.findIndex(cell=>cell===initial)+1
+	}
+	const options = ['empty'].concat(cells.map(cell => cell.name))
+	const openDropdown = document.createElement('button')
+	const _onSelect = (idx:number)=>{
+		openDropdown.textContent = String(options[idx])
+		if (idx === 0) {
+			initial = 'empty'
+			onSelect(initial)
+			return
+		}
+		const cell = cells[idx - 1]
+		if (!cell) {
+			initial = 'empty'
+			onSelect(initial)
+			return
+		}
+		initial = cell
+		onSelect(initial)
+	}
+	_onSelect(initialIdx)
+	return createDropdown(openDropdown, options, _onSelect)
+}
+
+
+
 
 const cellClassesListElement = document.getElementById('cell-classes-list'); if (!cellClassesListElement) throw new Error("could not find 'cell-classes-list'");
 const newCellButton = document.getElementById('new-cell-button');if (!newCellButton) throw new Error("Could not find 'new-cell-button'");
@@ -594,22 +690,26 @@ const windowListener = (()=>{
 
 const AllCellClasses = new (class {
 	private _cells:Cell[]
-	private updateListSignal
+	private resetEverything
 	private cellsOnDelete
+	private cellsOnChange
 	constructor(){
 		this._cells = []
-		this.updateListSignal = new Signal()
+		this.resetEverything = new Signal()
 		/**
 		 * Prevents memory leaks. Each signal is cleared before element structure is created, signals are used by the elements.
 		 */
-		this.cellsOnDelete = new Map<Cell, Signal<Cell>>()
+		this.cellsOnDelete = new Signal()
+		this.cellsOnChange = new Signal()
 	}
 
 	private updateList(){
-		this.updateListSignal.send(null)
-		this.cellsOnDelete.forEach(signal=>signal.clear())
-		const resetEverythingSignal = this.updateListSignal
+		this.resetEverything.send(null)
+		this.cellsOnDelete.clear()
 		const onDeletion = this.cellsOnDelete
+		this.cellsOnChange.clear()
+		const onChange = this.cellsOnChange
+		const resetEverythingSignal = this.resetEverything
 		const cells = this._cells
 		function createRecursiveRule(rule:HTMLElement, data:Set<Instruction>, instruction:Instruction, dataFields:Set<Instruction>[], nesting:number):HTMLElement {
 			const root = createRuleWrapper(rule, data, instruction)
@@ -643,7 +743,7 @@ const AllCellClasses = new (class {
 
 		function createRulesSection(data:Set<Instruction>, nesting:number):HTMLElement {
 			function createXChance(instruction: Instruction):HTMLParagraphElement {
-				if (instruction.id !== 'with_an_x%_chance') throw new Error("Wrong instruction id, mut be 'with_an_x%_chance'");
+				if (instruction.id !== 'with_an_x%_chance') throw new Error("Wrong instruction id, must be 'with_an_x%_chance'");
 				const rule = document.createElement('p')
 				const input = document.createElement('input')
 				input.type = 'number'
@@ -660,7 +760,7 @@ const AllCellClasses = new (class {
 
 			function createTurnInto(instruction: Instruction):HTMLParagraphElement {
 				const rule = document.createElement('p')
-				if (instruction.id !== 'turn into') throw new Error("Wrong instruction id, mut be 'turn into'");
+				if (instruction.id !== 'turn into') throw new Error("Wrong instruction id, must be 'turn into'");
 				let initialIdx = 0
 				if (instruction.param !== 'empty') {
 					initialIdx = cells.findIndex(cell=>cell===instruction.param)+1
@@ -679,16 +779,47 @@ const AllCellClasses = new (class {
 						return
 					}
 					instruction.param = cell
-					onDeletion.get(cell)?.subscribe(() => {
-						instruction.param = 'empty'
-						AllCellClasses.updateList()
-					})
 				}
 				onSelect(initialIdx)
 				const dropdown = createDropdown(openDropdown, options, onSelect)
 				const span = document.createElement('span')
 				span.appendChild(dropdown)
 				rule.append('turn into', span)
+				return rule
+			}
+
+			function createIfNeighbor(instruction:Instruction):HTMLParagraphElement {
+				if (instruction.id !== 'if neighbors') throw new Error("Wrong instruction id, must be 'if neighbors'");
+				const rule = document.createElement('p')
+				const p = ()=>{
+					removeAllChildren(rule)
+					const selectCondition = (()=>{
+						const selectConditionButton = document.createElement('button')
+						selectConditionButton.textContent = instruction.param.condition
+						const arr = ['at least','at most','less than','more than','exactly'] as const
+						return createDropdown(selectConditionButton, arr, idx=>{						 
+							selectConditionButton.textContent = arr[idx]
+							instruction.param.condition = arr[idx]
+						})
+					})()
+
+					const selectValue = document.createElement('input')
+					selectValue.type = 'number'
+					selectValue.max = '8'
+					selectValue.min = '0'
+					selectValue.value = String(instruction.param.value)
+					selectValue.addEventListener('input',()=>{
+						instruction.param.value = Number(selectValue.value)
+					})
+
+					const selectCell = createCellSelectionDropdown(instruction.param.cell, cells, selected=>{
+						instruction.param.cell = selected
+					})
+
+					rule.append('if', selectCondition, selectValue, 'are', selectCell)
+				}
+				p()
+				onChange.subscribe(p)
 				return rule
 			}
 
@@ -700,7 +831,7 @@ const AllCellClasses = new (class {
 			addNewButton.className = 'cell-class-new-rule'
 			addNewButton.textContent = '+new'
 			
-			const dropdown = createDropdown(addNewButton, ['With a X% chance...', 'turn into...'], idx=>{
+			const dropdown = createDropdown(addNewButton, ['With a X% chance...', 'turn into...', 'If neighbors...'], idx=>{
 				if (idx === 0) {
 					if (nesting < rulesNestingMax) {
 						console.log('clicked with an X% chance')
@@ -722,6 +853,23 @@ const AllCellClasses = new (class {
 						param:'empty'
 					} 
 					root.appendChild(createRuleWrapper(createTurnInto(instruction), data, instruction))
+				} else if (idx ===2) {
+					if (nesting < rulesNestingMax) {
+						console.log('If neighbors')
+						const then = new Set<Instruction>()
+						const instruction:Instruction = {
+							id:'if neighbors',
+							param:{
+								condition:'at least',
+								value:1,
+								cell:'empty'
+							},
+							then:then
+						}
+						root.appendChild(createRecursiveRule(createIfNeighbor(instruction),data, instruction, [then], nesting))
+					} else {
+						console.log('max nesting reached', nesting)
+					}
 				}
 			})
 
@@ -734,6 +882,9 @@ const AllCellClasses = new (class {
 					break;
 					case "turn into":
 						root.appendChild(createRuleWrapper(createTurnInto(instruction), data, instruction))
+					break;
+					case "if neighbors":
+						root.appendChild(createRecursiveRule(createIfNeighbor(instruction), data, instruction, [instruction.then], nesting))
 					break;
 				}
 			})
@@ -753,13 +904,13 @@ const AllCellClasses = new (class {
 			icon.contentEditable = 'true'
 			editableTextModule(icon, (el,newText)=>{
 				cell.icon = newText
-			})
-			cell.trackChanges(()=>{
+			},{onInput:'call'})
+			onChange.subscribe(()=>{
 				icon.textContent = cell.icon
 			})
 			header.appendChild(icon)
 			
-			const h = document.createElement('h3')		
+			const h = document.createElement('h3')
 			h.textContent = cell.name
 			h.contentEditable = 'true'
 			editableTextModule(h,(el,newText,oldText)=>{
@@ -810,9 +961,11 @@ const AllCellClasses = new (class {
 		if (this._cells.includes(cell)) return false
 		if (this._cells.some(v=>v.name === cell.name)) return false
 		this._cells.push(cell)
-		this.cellsOnDelete.set(cell,new Signal())
 		cell.onDeletion.once(()=>{
-			this.cellsOnDelete.get(cell)?.send(cell)
+			this.cellsOnDelete.send(undefined)
+		})
+		cell.onChange.once(()=>{
+			this.cellsOnChange.send(undefined)
 		})
 		this.updateList()
 		return true
@@ -855,7 +1008,7 @@ let brushCell:Cell|'empty' = 'empty' as const
 	})
 
 	for (const cell of AllCellClasses.cells) {
-		cell.trackChanges(()=>{
+		cell.onChange.subscribe(()=>{
 			if (cell.icon === brushCell) setBrushButton.textContent = cell.icon
 		})
 	}
