@@ -125,6 +125,10 @@ class Vector2D {
 		this.y = y
 	}
 
+	static from(vec:Vector2D):Vector2D{
+		return new Vector2D(vec.x, vec.y)
+	}
+
 	static fromKey(key:string):Vector2D{
 		const [x,y] = key.split(',').map(Number)
 		if (!x||!y) throw new Error("Invalid string, string should be similar to this: '1,2' to avoid error use only strings from the toKey method in Vector2D");
@@ -221,14 +225,14 @@ class Cell {
 
 class CellInstance {
 	readonly cell:Cell
-	private script:CustomScript
+	private readonly script:CustomScript
 	constructor(cell:Cell) {
 		this.cell = cell
 		this.script = new CustomScript(cell.script, this)
 	}
 
-	tick(deltaMs:number){
-		this.script.run()
+	tick(deltaMs:number, gridSnapshot:Grid){
+		this.script.run(gridSnapshot)
 	}
 }
 
@@ -316,14 +320,13 @@ class SignalPublic<P = unknown, R = void> {
 class CustomScript {
 	readonly instructions:Set<Instruction>
 	readonly cellInst:CellInstance
-	readonly environment
 	constructor(script:Set<Instruction>, cellInst:CellInstance) {
 		this.instructions = script
 		this.cellInst = cellInst
-		this.environment = Grid
 	}
 
-	run(){
+	run(snapshot:Grid){
+		const currentGrid = grid
 		const r = (inst:Instruction):void=>{
 			switch (inst.id) {
 				case 'with_an_x%_chance':
@@ -332,13 +335,14 @@ class CustomScript {
 				case 'turn into':
 					const param = inst.param
 					if (param === 'empty') {
-						this.environment.getPositions(this.cellInst).forEach(pos=>this.environment.removeCell(pos))
+						currentGrid.getPositions(this.cellInst).forEach(pos=>currentGrid.removeCell(pos))
 					}else{
-						this.environment.getPositions(this.cellInst).forEach(pos=>this.environment.setCell(new CellInstance(param), pos))
+						currentGrid.getPositions(this.cellInst).forEach(pos=>currentGrid.setCell(new CellInstance(param), pos))
 					}
 				break;
 				case "if neighbors":
-					if (numComp(this.environment.getNeighbors(this.cellInst).filter(ent=>ent.cell.cell === inst.param.cell).length, inst.param.condition, inst.param.value)) {
+					if (numComp(snapshot.getNeighbors(this.cellInst).filter(ent=>ent.cell.cell === inst.param.cell).length, inst.param.condition, inst.param.value)) {
+						console.log(snapshot)
 						inst.then.forEach(r)
 					}
 				break;
@@ -351,7 +355,15 @@ class CustomScript {
 
 
 
-const Grid = new (class {
+class Grid {
+	static from(grid:Grid):Grid{
+		const newGrid = new Grid(Vector2D.from(grid._size))
+		newGrid.entries = grid.entries.map(ent=>{
+			return {cell:ent.cell, position:Vector2D.from(ent.position)}
+		}) //Should not share array or entry, but should share references to each cellInstance
+		return newGrid
+	}
+
 	private _size:Vector2D
 	private entries:CellEntry[]
 	private elements:Entry<HTMLElement>[]
@@ -470,14 +482,16 @@ const Grid = new (class {
 		let now = Date.now()
 		const tick = ()=>{
 			const deltaMs = Date.now()-now; now=Date.now();
-			this.getCellInstances().forEach(inst=>inst.tick(deltaMs))
+			const snapshot = Grid.from(this)
+			this.getCellInstances().forEach(inst=>inst.tick(deltaMs, snapshot))
 			console.log('tick')
 		}
 		let intervalID:number|undefined
 		clearInterval(intervalID)
 		intervalID = setInterval(tick, 50)
 	}
-})(new Vector2D(30,30));
+}
+const grid = new Grid(new Vector2D(30,30));
 
 
 
@@ -1013,5 +1027,5 @@ let brushCell:Cell|'empty' = 'empty' as const
 }
 
 
-Grid.startSimulation()
+grid.startSimulation()
 
