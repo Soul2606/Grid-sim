@@ -113,6 +113,14 @@ type Instruction =
 	param:{condition:NumberComparison, value:number, cell:Cell|'empty'}
 	then:Set<Instruction>
 }
+ | {
+	id:'move to'
+	param:{
+		mode:'neighbor'|'any',
+		target:Cell|'empty',
+		leaveBehind:Cell|'empty'
+	}
+}
 
 
 
@@ -231,8 +239,8 @@ class CellInstance {
 		this.script = new CustomScript(cell.script, this)
 	}
 
-	tick(deltaMs:number, gridSnapshot:Grid){
-		this.script.run(gridSnapshot)
+	tick(deltaMs:number, gridSnapshot:Grid, moveIntents:MoveIntent[]){
+		this.script.run(gridSnapshot, moveIntents)
 	}
 }
 
@@ -316,6 +324,54 @@ class SignalPublic<P = unknown, R = void> {
 
 
 
+interface MoveIntent {
+	entry: CellEntry;
+	to: Vector2D;
+	leaveBehind: Cell|'empty';
+	decision: (banned:Vector2D[])=>MoveIntent|null
+}
+
+function decideMovement(position:Vector2D, banned:Vector2D[]=[], cell:Cell|'empty') {
+	let whitelist:Vector2D[] = []
+	let blacklist:Vector2D[] = Array.from(banned)
+	if (cell === 'empty'){
+		blacklist.push(...grid.getEntriesFromClass().map(ent=>ent.position)) // If no Cell is provided, get every entry
+	} else {
+		whitelist = grid.getEntriesFromClass(cell).map(ent=>ent.position)
+	}
+	return randArrayItem(offset(position).filter(pos=>
+		blacklist.every(ban=>
+			!ban.equals(pos)
+		)
+		&& grid.withinBounds(pos)
+		&& (whitelist.some(wl=>wl.equals(pos)) || whitelist.length === 0)
+	))
+}
+
+function groupIntentOverlap(intents:MoveIntent[]) {
+	const groups = new Map<string, MoveIntent[]>()
+	
+	for (const intent of intents) {
+		const key = intent.to.toKey()
+		if (!groups.has(key)) {
+			groups.set(key, [intent])
+		} else {
+			groups.get(key)!.push(intent)
+		}
+	}
+
+	const fine:MoveIntent[] = []
+	for (const [key, bucket] of groups.entries()) {
+		if (bucket.length === 1) {
+			groups.delete(key)
+			fine.push(bucket[0]!)
+		}
+	}
+
+	return {conflict:groups, fine}
+}
+
+
 
 class CustomScript {
 	readonly instructions:Set<Instruction>
@@ -325,8 +381,9 @@ class CustomScript {
 		this.cellInst = cellInst
 	}
 
-	run(snapshot:Grid){
+	run(snapshot:Grid, moveIntents:MoveIntent[]){
 		const currentGrid = grid
+		let thisMoveIntent:null|MoveIntent = null
 		const r = (inst:Instruction):void=>{
 			switch (inst.id) {
 				case 'with_an_x%_chance':
@@ -346,9 +403,28 @@ class CustomScript {
 						inst.then.forEach(r)
 					}
 				break;
+				case "move to":
+					snapshot.getPositions(this.cellInst).map<CellEntry>(pos=>{
+						return {position:pos, cell:this.cellInst}
+					}).forEach(ent=>{
+						const decisionFunc = (banned:Vector2D[]=[]):MoveIntent|null=>{
+							const to = decideMovement(ent.position, banned, inst.param.target)
+							if (!to) return null
+							return{
+								entry:ent,
+								to:to,
+								leaveBehind:inst.param.leaveBehind,
+								decision:decisionFunc
+							}
+						}
+						const decision = decisionFunc()
+						if (decision) thisMoveIntent = decision
+					})
+				break;
 			}
 		}
 		this.instructions.forEach(r)
+		if (thisMoveIntent) moveIntents.push(thisMoveIntent)
 	}
 }
 
@@ -395,6 +471,13 @@ class Grid {
 		const set = new Set<CellInstance>()
 		this.entries.forEach(ent=>set.add(ent.cell))
 		return Array.from(set)
+	}
+
+	getEntriesFromClass(cell?:Cell):readonly CellEntry[]{
+		if (cell === undefined) {
+			return this.entries.map(ent=>{return {cell:ent.cell, position:ent.position}})
+		}
+		return this.entries.filter(ent=>ent.cell.cell === cell).map(ent=>{return {cell:ent.cell, position:ent.position}})
 	}
 
 	getPositions(cell:CellInstance):Vector2D[]{
@@ -452,6 +535,9 @@ class Grid {
 		);
 	}
 
+	withinBounds(position:Vector2D):boolean{
+		return position.x < this.width && position.x >= 0 && position.y < this.height && position.y >= 0
+	}
 
 	startSimulation(){
 		const mainGrid = document.getElementById('main-grid')
@@ -479,16 +565,53 @@ class Grid {
 		}
 		this.elements = elements
 
+
+
 		let now = Date.now()
 		const tick = ()=>{
 			const deltaMs = Date.now()-now; now=Date.now();
 			const snapshot = Grid.from(this)
-			this.getCellInstances().forEach(inst=>inst.tick(deltaMs, snapshot))
+			let moveIntents:MoveIntent[] = []
+			this.getCellInstances().forEach(inst=>inst.tick(deltaMs, snapshot, moveIntents))
+			
+			const banned:Vector2D[] = []
+			const fineMoveIntents:MoveIntent[] = []
+			while (true) {
+				const {conflict, fine} = groupIntentOverlap(moveIntents)
+				fineMoveIntents.push(...fine)
+				if (conflict.size === 0) break
+
+				const newIntents:MoveIntent[] = []
+				conflict.forEach(intents=>{
+					const winner = randArrayItem(intents) // Remove a random item. The lucky winner that wont need to change destination
+					if (!winner) throw new Error("Error");
+					fineMoveIntents.push(winner)
+					banned.push(Vector2D.from(winner.to))
+					intents.forEach(v=>{
+						if (v === winner) return
+						const newIntent = (v.decision(banned))
+						if (newIntent) newIntents.push(newIntent) 
+						})
+				})
+				moveIntents = newIntents
+			}
+			fineMoveIntents.forEach(intent=>{
+				if (intent.leaveBehind === 'empty') {
+					this.removeCell(intent.entry.position)
+				} else {
+					this.setCell(new CellInstance(intent.leaveBehind), intent.entry.position)
+				}
+				this.setCell(intent.entry.cell, intent.to)
+			})
+
 			console.log('tick')
 		}
+
+
+
 		let intervalID:number|undefined
 		clearInterval(intervalID)
-		intervalID = setInterval(tick, 50)
+		intervalID = setInterval(tick, 150)
 	}
 }
 const grid = new Grid(new Vector2D(30,30));
@@ -505,6 +628,20 @@ function removeAllChildren(element:HTMLElement):Element[] {
 	return removed
 }
 
+
+
+function randArrayItem<T>(array:T[]):T|undefined {
+	if (array.length === 0) return undefined
+	return array[Math.floor(Math.random() * array.length)]
+}
+
+
+
+function offset(pos:Vector2D) {
+	return [-1, 0, 1].flatMap(dx =>
+		[-1, 0, 1].map(dy => (new Vector2D(pos.x+dx, pos.y+dy)))
+	).filter(p => !(p.equals(pos)));
+}
 
 
 
@@ -777,6 +914,34 @@ function createRulesSection(data:Set<Instruction>, nesting:number):HTMLElement {
 		return rule
 	}
 
+	function createMoveTo(instruction:Instruction):HTMLParagraphElement {
+		if (instruction.id !== 'move to') throw new Error("Wrong instruction id, must be 'move to'");
+		const rule = document.createElement('p')
+		const p = ()=>{
+			removeAllChildren(rule)
+			const selectMode = (()=>{
+				const btn = document.createElement('button')
+				btn.textContent = instruction.param.mode
+				const arr = ['neighbor', 'any'] as const
+				return createDropdown(btn, arr, idx=>{
+					const str = arr[idx]
+					btn.textContent = str === 'any'? 'any' : 'a neighboring'
+					instruction.param.mode = str
+				})
+			})()
+			const selectCell = createCellSelectionDropdown(instruction.param.target, cell=>{
+				instruction.param.target = cell
+			})
+			const selectLeaving = createCellSelectionDropdown(instruction.param.leaveBehind, cell=>{
+				instruction.param.leaveBehind = cell
+			})
+			rule.append('move to', selectMode, selectCell, 'leaving', selectLeaving, 'behind')
+		}
+		p()
+		AllCellClasses.onChange.subscribe(p)
+		return rule
+	}
+
 	const root = document.createElement('div')
 	root.className = 'cell-class-rules'
 	root.style.marginLeft = rulesNestingDistance + 'px'
@@ -785,7 +950,7 @@ function createRulesSection(data:Set<Instruction>, nesting:number):HTMLElement {
 	addNewButton.className = 'cell-class-new-rule'
 	addNewButton.textContent = '+new'
 	
-	const dropdown = createDropdown(addNewButton, ['With a X% chance...', 'turn into...', 'If neighbors...'], idx=>{
+	const dropdown = createDropdown(addNewButton, ['With a X% chance...', 'turn into...', 'If neighbors...', 'Move to...'], idx=>{
 		if (idx === 0) {
 			if (nesting < rulesNestingMax) {
 				console.log('clicked with an X% chance')
@@ -823,6 +988,13 @@ function createRulesSection(data:Set<Instruction>, nesting:number):HTMLElement {
 			} else {
 				console.log('max nesting reached', nesting)
 			}
+		} else if (idx === 3) {
+			console.log('move to')
+			const instruction:Instruction = {
+				id:'move to',
+				param:{mode:'neighbor', target:'empty', leaveBehind:'empty'}
+			}
+			root.appendChild(createRuleWrapper(createMoveTo(instruction), data, instruction))
 		}
 	})
 
@@ -838,6 +1010,9 @@ function createRulesSection(data:Set<Instruction>, nesting:number):HTMLElement {
 			break;
 			case "if neighbors":
 				root.appendChild(createRecursiveRule(createIfNeighbor(instruction), data, instruction, [instruction.then], nesting))
+			break;
+			case "move to":
+				root.appendChild(createRuleWrapper(createMoveTo(instruction), data, instruction))
 			break;
 		}
 	})
