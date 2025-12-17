@@ -1,3 +1,68 @@
+
+
+/*
+Grid System Overview
+--------------------
+
+The grid is composed of **grid-cell elements**.
+Each grid-cell’s data is stored in the grid class’s `entries` property,
+which is an array of `CellEntry`.
+
+CellEntry
+---------
+A `CellEntry` contains:
+- A cell instance
+- A position
+
+Multiple entries can exist at the same position,
+except for **grounded entries**.
+Grounded entries are exclusive: no other grounded entry
+can share their position.
+
+CellInstance
+------------
+Each cell instance contains:
+- A "cell" (also called a cell class)
+- Scripts
+- Variables
+- Events
+
+CellClass
+---------
+The cell class is the highest-level abstraction.
+It defines how each cell instance should behave, including:
+- Available scripts
+- Variable names and types
+- Whether it is floating
+- Whether it is a reference
+
+This is the level of abstraction the user manipulates directly.
+When the user changes a cell class, significant UI updates
+must occur to reflect those changes.
+
+Special Cell Types
+------------------
+Floating cells:
+- Can overlap with other cells
+- Do not block non-floating cells
+
+Reference cells:
+- A single cell instance can exist in multiple places at once
+- Note: this applies to the **cellInstance**, not the `CellEntry`
+
+Empty cells:
+- !!Important!! Empty cells are **not stored** as data in the grid class
+- You will not find empty cells in the `entries` array
+- A string `'empty'` is used to refer to an empty grid-cell
+- To check if a cell is empty:
+  - Use `entriesAtPos` and verify if nothing is found
+  - Or use `getGroundCell`, which can return `'empty'`
+    (but ignores floating cells)
+*/
+
+
+
+
 console.log('hello world')
 
 
@@ -66,15 +131,15 @@ class Variable<T extends VariableTypes = VariableTypes> implements VariableSigna
 
 
 type CellEntry = {
-	cell:CellInstance
-	position:Vector2D
+	readonly cell:CellInstance
+	readonly position:Vector2D
 }
 
 
 
 type Entry<T> = {
-	position:Vector2D
-	value:T
+	readonly position:Vector2D
+	readonly value:T
 }
 
 
@@ -326,50 +391,20 @@ class SignalPublic<P = unknown, R = void> {
 
 interface MoveIntent {
 	entry: CellEntry;
-	to: Vector2D;
+	toOptions: Vector2D[];
+	to: null|Vector2D;
 	leaveBehind: Cell|'empty';
-	decision: (banned:Vector2D[])=>MoveIntent|null
 }
 
-function decideMovement(position:Vector2D, banned:Vector2D[]=[], cell:Cell|'empty') {
-	let whitelist:Vector2D[] = []
-	let blacklist:Vector2D[] = Array.from(banned)
-	if (cell === 'empty'){
-		blacklist.push(...grid.getEntriesFromClass().map(ent=>ent.position)) // If no Cell is provided, get every entry
-	} else {
-		whitelist = grid.getEntriesFromClass(cell).map(ent=>ent.position)
-	}
-	return randArrayItem(offset(position).filter(pos=>
-		blacklist.every(ban=>
+function decideMovement(position:Vector2D, banned:Vector2D[]=[]) {
+	return shuffle(offset(position).filter(pos=>
+		banned.every(ban=>
 			!ban.equals(pos)
 		)
 		&& grid.withinBounds(pos)
-		&& (whitelist.some(wl=>wl.equals(pos)) || whitelist.length === 0)
 	))
 }
 
-function groupIntentOverlap(intents:MoveIntent[]) {
-	const groups = new Map<string, MoveIntent[]>()
-	
-	for (const intent of intents) {
-		const key = intent.to.toKey()
-		if (!groups.has(key)) {
-			groups.set(key, [intent])
-		} else {
-			groups.get(key)!.push(intent)
-		}
-	}
-
-	const fine:MoveIntent[] = []
-	for (const [key, bucket] of groups.entries()) {
-		if (bucket.length === 1) {
-			groups.delete(key)
-			fine.push(bucket[0]!)
-		}
-	}
-
-	return {conflict:groups, fine}
-}
 
 
 
@@ -406,18 +441,25 @@ class CustomScript {
 				case "move to":
 					snapshot.getPositions(this.cellInst).map<CellEntry>(pos=>{
 						return {position:pos, cell:this.cellInst}
-					}).forEach(ent=>{
-						const decisionFunc = (banned:Vector2D[]=[]):MoveIntent|null=>{
-							const to = decideMovement(ent.position, banned, inst.param.target)
-							if (!to) return null
-							return{
-								entry:ent,
-								to:to,
-								leaveBehind:inst.param.leaveBehind,
-								decision:decisionFunc
+					}).forEach(entry=>{
+						const banned:Vector2D[] = []
+						for (const pos of offset(entry.position)) {
+							const value = snapshot.getGroundCell(pos)
+							if (value === 'empty') {
+								if (inst.param.target !== 'empty') banned.push(pos)
+							} else if (value.cell !== inst.param.target) {
+								banned.push(pos)
 							}
 						}
-						const decision = decisionFunc()
+						const to = decideMovement(entry.position, banned)
+						if (!to) return null
+						const decision:MoveIntent = {
+							entry:entry,
+							toOptions:to,
+							to:null,
+							leaveBehind:inst.param.leaveBehind,
+						}
+						
 						if (decision) thisMoveIntent = decision
 					})
 				break;
@@ -443,6 +485,7 @@ class Grid {
 	private _size:Vector2D
 	private entries:CellEntry[]
 	private elements:Entry<HTMLElement>[]
+	private loopFunc:Function|undefined
 	constructor(size:Vector2D) {
 		this._size = size
 		this.entries = []
@@ -486,6 +529,10 @@ class Grid {
 
 	entriesAtPos(pos:Vector2D):CellEntry[]{
 		return this.entries.filter(ent=>ent.position.equals(pos))
+	}
+
+	getGroundCell(pos:Vector2D):CellInstance|'empty'{
+		return this.entries.filter(ent=>ent.position.equals(pos)).find(ent=>!ent.cell.cell.isFloating)?.cell??'empty'
 	}
 
 	setCell(cell:CellInstance, position:Vector2D){
@@ -571,47 +618,33 @@ class Grid {
 		const tick = ()=>{
 			const deltaMs = Date.now()-now; now=Date.now();
 			const snapshot = Grid.from(this)
-			let moveIntents:MoveIntent[] = []
+			const moveIntents:MoveIntent[] = []
 			this.getCellInstances().forEach(inst=>inst.tick(deltaMs, snapshot, moveIntents))
 			
-			const banned:Vector2D[] = []
-			const fineMoveIntents:MoveIntent[] = []
-			while (true) {
-				const {conflict, fine} = groupIntentOverlap(moveIntents)
-				fineMoveIntents.push(...fine)
-				if (conflict.size === 0) break
-
-				const newIntents:MoveIntent[] = []
-				conflict.forEach(intents=>{
-					const winner = randArrayItem(intents) // Remove a random item. The lucky winner that wont need to change destination
-					if (!winner) throw new Error("Error");
-					fineMoveIntents.push(winner)
-					banned.push(Vector2D.from(winner.to))
-					intents.forEach(v=>{
-						if (v === winner) return
-						const newIntent = (v.decision(banned))
-						if (newIntent) newIntents.push(newIntent) 
-						})
+			const ass = assignNonOverlappingPositions(shuffle(moveIntents.map(v=>v.toOptions)))
+			if (ass) {
+				ass.forEach((v,i)=>moveIntents[i]!.to = (v?v:null))
+				moveIntents.forEach(intent=>{
+					if (intent.to===null) return
+					if (intent.leaveBehind === 'empty') {
+						this.removeCell(intent.entry.position)
+					} else {
+						this.setCell(new CellInstance(intent.leaveBehind), intent.entry.position)
+					}
+					this.setCell(intent.entry.cell, intent.to)
 				})
-				moveIntents = newIntents
 			}
-			fineMoveIntents.forEach(intent=>{
-				if (intent.leaveBehind === 'empty') {
-					this.removeCell(intent.entry.position)
-				} else {
-					this.setCell(new CellInstance(intent.leaveBehind), intent.entry.position)
-				}
-				this.setCell(intent.entry.cell, intent.to)
-			})
-
-			console.log('tick')
 		}
 
 
-
-		let intervalID:number|undefined
-		clearInterval(intervalID)
-		intervalID = setInterval(tick, 150)
+		const loop = ()=>{
+			const start = performance.now()
+			tick()
+			const elapsed = performance.now() - start
+			if (this.loopFunc) setTimeout(this.loopFunc, Math.max(0, 50 - elapsed))
+		}
+		this.loopFunc = loop
+		loop()
 	}
 }
 const grid = new Grid(new Vector2D(30,30));
@@ -637,10 +670,45 @@ function randArrayItem<T>(array:T[]):T|undefined {
 
 
 
+function shuffle<T>(arr: T[]): T[] {
+	const copy = arr.slice()
+	for (let i = copy.length - 1; i > 0; i--) {
+		const j = Math.floor(Math.random() * (i + 1))
+		;[copy[i], copy[j]] = [copy[j]!, copy[i]!]
+	}
+	return copy
+}
+
+
+
 function offset(pos:Vector2D) {
 	return [-1, 0, 1].flatMap(dx =>
 		[-1, 0, 1].map(dy => (new Vector2D(pos.x+dx, pos.y+dy)))
 	).filter(p => !(p.equals(pos)));
+}
+
+
+
+function assignNonOverlappingPositions( options: Vector2D[][] ): (Vector2D | null)[] | null { 
+	const n = options.length 
+	const result: (Vector2D | null)[] = new Array(n).fill(null) 
+	const used = new Set<string>() 
+	function backtrack(i: number): boolean {
+		 if (i === n) return true // all assigned 
+		 for (const pos of options[i]!) { 
+			const k = pos.toKey()
+			if (used.has(k)) continue // already taken 
+			// choose 
+			result[i] = pos
+			used.add(k)
+			if (backtrack(i + 1)) return true 
+			// undo 
+			result[i] = null
+			used.delete(k) 
+		} 
+		return false 
+	} 
+	return backtrack(0) ? result : null 
 }
 
 
